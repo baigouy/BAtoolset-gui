@@ -29,7 +29,7 @@ from batoolset.drawings.shapes.scalebar import ScaleBar
 from batoolset.drawings.shapes.txt2d import TAText2D
 
 from batoolset.img import Img, toQimage, RGB_to_BGR, guess_dimensions, max_proj, min_proj, avg_proj
-from qtpy.QtCore import QRectF, QPointF, QSize, QRect
+from qtpy.QtCore import QRectF, QPointF, QSize, QRect, QByteArray
 from qtpy.QtWidgets import QApplication
 import sys
 import io
@@ -115,8 +115,26 @@ def _make_svg_renderer(source):
     rectangle. Without this, a figure whose (tight-cropped) SVG aspect differs
     from the panel rect — e.g. an equal-aspect image in a 4:3 matplotlib figure,
     or a chart re-rendered with publication fonts at export — is silently
-    stretched, which distorts image data."""
-    r = QSvgRenderer(source)
+    stretched, which distorts image data.
+
+    SVGs with clip paths (Inkscape drawings, Matplotlib's clipped axes) get a
+    ClippingSvgRenderer: Qt's own renderer ignores clip-path."""
+    r = None
+    try:
+        data = source
+        if isinstance(source, str):
+            with open(source, 'rb') as _f:
+                data = _f.read()
+        elif isinstance(source, QByteArray):
+            data = bytes(source)
+        if isinstance(data, (bytes, bytearray)):
+            from batoolset.drawings.svg_clip_renderer import ClippingSvgRenderer
+            if ClippingSvgRenderer.needed(bytes(data)):
+                r = ClippingSvgRenderer(bytes(data))
+    except Exception:
+        r = None
+    if r is None:
+        r = QSvgRenderer(source)
     try:
         r.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
     except AttributeError:  # Qt < 5.15
@@ -2071,7 +2089,9 @@ class Image2D(Rectangle2D):
         elif figure is not None and isinstance(figure, str):  # path to an svg or pdf file
             if figure.lower().endswith('.pdf'):
                 try:
-                    self._raw_svg_bytes = pdf_to_svg_bytes(figure)
+                    # the page to show is the PDF's "series" (0-based), like a .lif series
+                    page = getattr(self, 'serie_to_open', None) or 0
+                    self._raw_svg_bytes = pdf_to_svg_bytes(figure, page=page)
                 except Exception as e:
                     logger.error('could not read PDF "' + str(figure) + '": ' + str(e))
                     self._raw_svg_bytes = None
