@@ -86,6 +86,30 @@ def _normalize_to_uint8(arr, mn, mx):
 from batoolset.matplolibs.tools import best_helvetica_clone as _best_helvetica_clone
 
 
+# Vector files shown as panels (kept as vectors in PDF/SVG exports). A PDF is
+# converted to SVG (first page) with PyMuPDF, an optional dependency.
+VECTOR_FILE_EXTS = ('.svg', '.pdf')
+
+
+def is_vector_file(path):
+    return isinstance(path, str) and path.lower().endswith(VECTOR_FILE_EXTS)
+
+
+def pdf_to_svg_bytes(path, page=0):
+    """The *page* of the PDF at *path* as SVG bytes (text as outlines, images
+    embedded at their own resolution). Needs PyMuPDF (pip install pymupdf)."""
+    try:
+        import fitz
+    except ImportError as e:
+        raise ImportError('PDF panels need PyMuPDF: pip install pymupdf '
+                          '(or pip install pyfigures[pdf])') from e
+    with fitz.open(path) as doc:
+        if doc.page_count == 0:
+            raise ValueError(f'{path} has no pages')
+        svg = doc[min(max(0, int(page)), doc.page_count - 1)].get_svg_image(text_as_path=True)
+    return svg.encode('utf-8')
+
+
 def _make_svg_renderer(source):
     """QSvgRenderer that keeps the SVG's aspect ratio when drawn into a panel
     rectangle. Without this, a figure whose (tight-cropped) SVG aspect differs
@@ -269,8 +293,8 @@ class Image2D(Rectangle2D):
             # else:
             #     self.img = template_rect
         elif self.filename is not None: # and not isinstance(self.filename, TAText2D):
-            # handle svg files first
-            if self.filename.lower().endswith('.svg'):
+            # handle vector files (svg, pdf) first
+            if is_vector_file(self.filename):
                 super(Image2D, self).__init__(0, 0, 512, 512) # fake definition
                 self.setFigure(self.filename) #real loading of the parameters
             else:
@@ -1621,6 +1645,9 @@ class Image2D(Rectangle2D):
                 buf.close()
         elif isinstance(getattr(self, 'img', None), QSvgRenderer):
             raw = getattr(self, '_raw_svg_bytes', None)
+            # a PDF (a finished plot) keeps its own line widths; its text is outlines anyway
+            if isinstance(self.filename, str) and self.filename.lower().endswith('.pdf'):
+                raw = None
             if raw is not None:
                 transformed = self._transform_svg_bytes(raw)
                 if transformed is not raw:
@@ -2041,13 +2068,30 @@ class Image2D(Rectangle2D):
                 size = self.renderer.defaultSize()
                 self.setWidth(size.width())
                 self.setHeight(size.height())
-        elif figure is not None and isinstance(figure, str):  # path to an svg file
-            try:
-                with open(figure, 'rb') as _f:
-                    self._raw_svg_bytes = _f.read()
-            except Exception:
-                self._raw_svg_bytes = None
-            self.renderer = _make_svg_renderer(figure)
+        elif figure is not None and isinstance(figure, str):  # path to an svg or pdf file
+            if figure.lower().endswith('.pdf'):
+                try:
+                    self._raw_svg_bytes = pdf_to_svg_bytes(figure)
+                except Exception as e:
+                    logger.error('could not read PDF "' + str(figure) + '": ' + str(e))
+                    self._raw_svg_bytes = None
+                    self.isSet = False
+                    return
+                # Qt's SVG renderer ignores clip paths: a dedicated renderer
+                # keeps plot curves inside their axes
+                from batoolset.drawings.pdf_svg_renderer import make_pdf_svg_renderer
+                self.renderer = make_pdf_svg_renderer(self._raw_svg_bytes)
+                try:
+                    self.renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+                except AttributeError:
+                    pass
+            else:
+                try:
+                    with open(figure, 'rb') as _f:
+                        self._raw_svg_bytes = _f.read()
+                except Exception:
+                    self._raw_svg_bytes = None
+                self.renderer = _make_svg_renderer(figure)
             self.img= self.renderer
             self.filename = figure
             if self.width() == 0:
