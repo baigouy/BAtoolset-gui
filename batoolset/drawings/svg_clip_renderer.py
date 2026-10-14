@@ -8,9 +8,11 @@ styles and transforms), and sets the clip itself around every element that
 references a ``<clipPath>``. Elements without clipping inside are drawn whole.
 
 Output: PDF / raster painters clip natively, so everything stays vector.
-Qt's SVG writer drops clipping, so when the painter writes SVG, each clipped
-element is drawn as an image (300 dpi at the drawn size), clipped; everything
-else stays vector.
+Figure SVG exports do not draw panels through this renderer: they embed the
+panel's SVG source as is (batoolset.drawings.svg_embed). Only when some other
+code draws it to an SVG painter (Qt's SVG writer drops clipping) is each
+clipped element drawn as an image (600 dpi at the drawn size), clipped;
+everything else stays vector.
 
 ``make_svg_renderer(path_or_bytes)`` returns a plain QSvgRenderer for SVGs
 without clip paths.
@@ -32,7 +34,8 @@ _NOT_DRAWN = {"defs", "clipPath", "mask", "title", "desc", "metadata", "style", 
               "font", "font-face", "namedview", "sodipodi:namedview"}
 _URL = re.compile(r"url\(\s*#([^)\s]+)\s*\)")
 _NUM = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
-SVG_OUTPUT_DPI = 300
+SVG_OUTPUT_DPI = 600     # more than any journal asks for
+SVG_OUTPUT_MAX_PIXELS = 40_000_000      # per clipped element (an A4 page at 600 dpi is 35 MP)
 
 
 def _tag(el):
@@ -104,12 +107,13 @@ class ClippingSvgRenderer(QSvgRenderer):
         self._mark(root)
 
     def _mark(self, el):
-        """True if *el* or a descendant references a clip path (memoised)."""
-        has = _clip_ref(el) is not None
+        """True if *el* or a descendant references a clip path. Memoised per
+        element: whether a *descendant* (not *el* itself) does."""
+        below = False
         for child in el:
-            has = self._mark(child) or has
-        self._clipped_below[el.get("id")] = has
-        return has
+            below = self._mark(child) or below
+        self._clipped_below[el.get("id")] = below
+        return below or _clip_ref(el) is not None
 
     @staticmethod
     def needed(svg_bytes) -> bool:
@@ -181,8 +185,10 @@ class ClippingSvgRenderer(QSvgRenderer):
             own = self._clip_in_doc(el)
             if own is not None:
                 clip = own if clip is None else clip.intersected(own)
-        if self._clipped_below.get(el_id) and _clip_ref(el) is None and len(el):
-            for child in el:                      # a clipped element deeper inside
+        if self._clipped_below.get(el_id) and len(el):
+            # a clipped element deeper inside: draw the children one by one,
+            # each inside this element's own clip (if any) and theirs
+            for child in el:
                 self._draw(painter, child, clip)
             return
         if not self.elementExists(el_id):
@@ -207,6 +213,8 @@ class ClippingSvgRenderer(QSvgRenderer):
         if visible.isEmpty():
             return
         scale = SVG_OUTPUT_DPI / 72.0
+        if visible.width() * visible.height() * scale * scale > SVG_OUTPUT_MAX_PIXELS:
+            scale = (SVG_OUTPUT_MAX_PIXELS / (visible.width() * visible.height())) ** 0.5
         img = QImage(max(1, int(round(visible.width() * scale))), max(1, int(round(visible.height() * scale))),
                      QImage.Format.Format_ARGB32_Premultiplied)
         img.fill(QColor(0, 0, 0, 0))

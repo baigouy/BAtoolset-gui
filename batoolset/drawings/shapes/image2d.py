@@ -17,7 +17,7 @@ from batoolset.drawings.shapes.rectangle2d import Rectangle2D
 import numpy as np
 import matplotlib.pyplot as plt
 from qtpy import QtGui
-from qtpy.QtGui import QPainter, QColor, QBrush, QPen, QTransform, QFontMetrics,QImage,QPixmap
+from qtpy.QtGui import QPainter, QColor, QBrush, QPen, QTransform, QFontMetrics,QImage,QPixmap, QPolygonF
 from qtpy.QtCore import Qt
 from qtpy.QtSvg import QSvgGenerator
 from qtpy.QtSvg import QSvgRenderer
@@ -179,6 +179,12 @@ def _make_svg_renderer(source):
     try:
         r.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
     except AttributeError:  # Qt < 5.15
+        pass
+    # the SVG source itself, embedded as is in SVG exports (svg_embed)
+    try:
+        if isinstance(data, (bytes, bytearray)):
+            r._pyf_svg_source = bytes(data)
+    except Exception:
         pass
     return r
 
@@ -1878,9 +1884,21 @@ class Image2D(Rectangle2D):
     def _render_vector_content(self, painter, rect_to_plot):
         """Render the SVG/matplotlib renderer content into rect_to_plot, honouring
         crop and rotation. This is the true vector path used for export; interactive
-        painting goes through _get_cached_vector_pixmap instead."""
+        painting goes through _get_cached_vector_pixmap instead.
+
+        In an SVG export that embeds vector panels (svg_embed.collecting), the
+        panel's own SVG source is placed instead of being drawn through Qt, so
+        its text and clip paths are kept."""
+        from batoolset.drawings import svg_embed
+        source = getattr(self.renderer, '_pyf_svg_source', None)
+        embed = source is not None and svg_embed.wants(painter)
+        try:
+            keep_aspect = self.renderer.aspectRatioMode() == Qt.AspectRatioMode.KeepAspectRatio
+        except Exception:
+            keep_aspect = True
         if self.crop_left or self.crop_right or self.crop_top or self.crop_bottom or self.theta:
             # crop and rotations for svg in the same way as for figs
+            outer = painter.worldTransform()
             painter.save()
             w, h = self.get_raw_size()
             svg_rect = QRectF(0, 0, w, h)
@@ -1910,11 +1928,22 @@ class Image2D(Rectangle2D):
                 painter.rotate(self.theta)
                 painter.translate(-svg_rect.center())
 
-            self.renderer.render(painter, svg_rect)
+            if embed:
+                # the visible panel (rect_to_plot, outer coordinates) in the
+                # SVG's own coordinates: the clip of the embedded source
+                inv, ok = painter.worldTransform().inverted()
+                clip = (outer * inv).map(QPolygonF(QRectF(rect_to_plot))) if ok else None
+                svg_embed.active().place(painter, svg_rect, source, clip=clip, keep_aspect=keep_aspect)
+            else:
+                self.renderer.render(painter, svg_rect)
             painter.restore()
         else:
             painter.save()
-            self.renderer.render(painter, rect_to_plot)
+            if embed:
+                svg_embed.active().place(painter, rect_to_plot, source, clip=QRectF(rect_to_plot),
+                                         keep_aspect=keep_aspect)
+            else:
+                self.renderer.render(painter, rect_to_plot)
             painter.restore()
 
     def draw_bg(self, painter, draw=True, parent=None, restore_painter_in_the_end=True):
@@ -1926,7 +1955,9 @@ class Image2D(Rectangle2D):
             painter.setBrush(Qt.NoBrush)
 
             if parent is None:
-                painter.setClipRect(self.getRect(all=True))  # required first to fraw the stuff at the very beginning of it !!! --> it must be done before save
+                # intersect, never replace: a figure replayed by the poster
+                # designer (QPicture) must stay inside the poster's crop clip
+                painter.setClipRect(self.getRect(all=True), Qt.ClipOperation.IntersectClip)  # required first to fraw the stuff at the very beginning of it !!! --> it must be done before save
 
             if self.fill_color is not None:
                 painter.setBrush(QBrush(QColor(self.fill_color)))
@@ -2146,6 +2177,7 @@ class Image2D(Rectangle2D):
                     self.renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
                 except AttributeError:
                     pass
+                self.renderer._pyf_svg_source = self._raw_svg_bytes      # for svg_embed
             else:
                 try:
                     with open(figure, 'rb') as _f:
