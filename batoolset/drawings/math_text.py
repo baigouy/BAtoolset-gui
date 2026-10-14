@@ -7,8 +7,10 @@ path from Matplotlib's mathtext, at the size and colour of the surrounding
 text. ``\\$`` stays a literal dollar.
 
 Engines (label_math_engine): with a LaTeX installation each formula is typeset
-by LaTeX itself — full LaTeX: siunitx, bm, any amsmath construct — in Latin
-Modern (sans-serif maths for sans-serif labels), and kept as an SVG in the
+by LaTeX itself — full LaTeX: siunitx, bm, any amsmath construct — in the
+label's own font when XeLaTeX is available (letters, digits and Greek from the
+font, symbols from Latin Modern Math), else in Latin Modern (sans-serif maths
+for sans-serif labels), and kept as an SVG in the
 caches of batoolset.latex_tools (PyFigures puts the figure's own
 ``equations/labels`` folder first, so the formulas travel with the figure and
 render identically on computers without TeX). Otherwise Matplotlib's mathtext
@@ -140,8 +142,20 @@ def _latex_math(tex, font, color):
     size_pt = font.pointSizeF() if font.pointSizeF() > 0 else _em_px(font) * 0.75
     family = (font.family() or "").lower()
     sans = "sans" in family or not any(h in family for h in _SERIF_HINTS)
+    # the label's own font for letters and digits (XeLaTeX), the family Qt drew with
+    from qtpy.QtGui import QFontInfo
+    font_files = _font_files(QFontInfo(font).family() or font.family())
     return LT.inline_math_svg(tex, round(size_pt, 2), sans=sans, color=color.name(),
-                              compile_missing=LT.latex_available())
+                              compile_missing=LT.latex_available(), font_files=font_files)
+
+
+@functools.lru_cache(maxsize=64)
+def _font_files(family):
+    try:
+        from batoolset.latex_tools import font_files_for
+        return font_files_for(family)
+    except Exception:
+        return None
 
 
 class MathObject(_TextObjectBase):
@@ -185,11 +199,13 @@ class MathObject(_TextObjectBase):
 
     def drawObject(self, painter, rect, doc, pos, fmt):
         try:
-            drawing, _, _, baseline = self._geometry(fmt)
+            drawing, width, _, baseline = self._geometry(fmt)
             painter.save()
             try:
                 painter.translate(rect.left(), rect.top() + baseline)
-                if drawing[0] == "svg":
+                if SOURCE_MARKERS:
+                    _draw_marker(painter, fmt, width)
+                elif drawing[0] == "svg":
                     _, svg, w, h, d = drawing
                     # the SVG's baseline is y = 0: its box spans [-h, +d]
                     _svg_renderer(svg).render(painter, QRectF(0.0, -h, w, h + d))
@@ -199,6 +215,20 @@ class MathObject(_TextObjectBase):
                 painter.restore()
         except Exception:
             _log_failure(fmt)
+
+
+# Editable exports (PowerPoint, Illustrator) set this while they record the
+# figure: each formula is then drawn as a marker text run carrying its TeX
+# source, so the export can rebuild it as a native equation instead of outlines.
+SOURCE_MARKERS = False
+MARKER = "PYFMATH:"
+
+
+def _draw_marker(painter, fmt, width):
+    cf = _char_format(fmt)
+    tex = str(fmt.property(PROP_TEX))
+    painter.setFont(cf.font())
+    painter.drawText(QPointF(0.0, 0.0), MARKER + "%.3f:" % width + tex.encode("utf-8").hex())
 
 
 def _char_format(fmt):

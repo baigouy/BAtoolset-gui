@@ -1601,6 +1601,9 @@ class Image2D(Rectangle2D):
             try:
                 import matplotlib as mpl
                 rc_overrides = self._publication_rc_overrides() if apply_publication else {}
+                # settings the plot was made with (e.g. LaTeX text: text.usetex and its
+                # preamble are read when the plot is drawn, not when it is made)
+                rc_overrides = {**(getattr(self.img, '_pyf_rc', None) or {}), **rc_overrides}
                 from batoolset.matplolibs.tools import figure_pad_inches
                 pad = figure_pad_inches(self.img)  # same pad get_fig_rect sized the panel with
                 with mpl.rc_context(rc_overrides):
@@ -1615,10 +1618,17 @@ class Image2D(Rectangle2D):
             return buf
         return None
 
+    def _publication_family(self):
+        """The figure font for the plot's text; None for a plot typeset by LaTeX
+        (usetex knows no system font names: it would fall back to serif)."""
+        if (getattr(self.img, '_pyf_rc', None) or {}).get('text.usetex'):
+            return None
+        return getattr(self, 'publication_font', None)
+
     def _publication_rc_overrides(self):
         font_size = getattr(self, 'publication_font_size', 12)
         line_width = getattr(self, 'publication_line_width', 0.65)
-        font_family = getattr(self, 'publication_font', None)
+        font_family = self._publication_family()
         overrides = {
             'font.size': font_size,
             'axes.titlesize': font_size,
@@ -1642,7 +1652,7 @@ class Image2D(Rectangle2D):
         import matplotlib.text as mtext
         font_size = getattr(self, 'publication_font_size', 12)
         line_width = getattr(self, 'publication_line_width', 0.65)
-        font_family = getattr(self, 'publication_font', None)
+        font_family = self._publication_family()
         saved_lw = []
         saved_fs = []
         for artist in self.img.findobj(lambda a: hasattr(a, 'set_linewidth') and hasattr(a, 'get_linewidth')):
@@ -1681,7 +1691,7 @@ class Image2D(Rectangle2D):
         """Return svg_bytes with stroke widths set to an absolute value and font family replaced."""
         import re
         stroke_width = getattr(self, 'publication_svg_stroke_width', None)
-        font_family  = getattr(self, 'publication_font', None)
+        font_family  = self._publication_family()
         if stroke_width is None and font_family is None:
             return svg_bytes
         text = svg_bytes.decode('utf-8') if isinstance(svg_bytes, bytes) else svg_bytes
