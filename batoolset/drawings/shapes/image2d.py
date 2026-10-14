@@ -86,9 +86,14 @@ def _normalize_to_uint8(arr, mn, mx):
 from batoolset.matplolibs.tools import best_helvetica_clone as _best_helvetica_clone
 
 
-# Vector files shown as panels (kept as vectors in PDF/SVG exports). A PDF is
-# converted to SVG (first page) with PyMuPDF, an optional dependency.
+# Vector files shown as panels (kept as vectors in PDF/SVG exports). A PDF page
+# is converted to SVG with PyMuPDF (AGPL, optional) or, without it, rendered
+# as an image with pypdfium2 (Apache/BSD) and wrapped in an SVG.
 VECTOR_FILE_EXTS = ('.svg', '.pdf')
+
+# resolution of a PDF page rendered without PyMuPDF, capped in total pixels
+PDF_RASTER_DPI = 600
+PDF_RASTER_MAX_PIXELS = 25_000_000
 
 
 def is_vector_file(path):
@@ -96,17 +101,53 @@ def is_vector_file(path):
 
 
 def pdf_to_svg_bytes(path, page=0):
-    """The *page* of the PDF at *path* as SVG bytes (text as outlines, images
-    embedded at their own resolution). Needs PyMuPDF (pip install pymupdf)."""
+    """The *page* (0-based) of the PDF at *path* as SVG bytes. With PyMuPDF
+    the page stays vector (text as outlines, images embedded at their own
+    resolution); otherwise pypdfium2 renders it at PDF_RASTER_DPI."""
     try:
         import fitz
-    except ImportError as e:
-        raise ImportError('PDF panels need PyMuPDF: pip install pymupdf '
-                          '(or pip install pyfigures[pdf])') from e
+    except ImportError:
+        return _pdf_page_as_raster_svg(path, page)
     with fitz.open(path) as doc:
         if doc.page_count == 0:
             raise ValueError(f'{path} has no pages')
         svg = doc[min(max(0, int(page)), doc.page_count - 1)].get_svg_image(text_as_path=True)
+    return svg.encode('utf-8')
+
+
+def _pdf_page_as_raster_svg(path, page=0):
+    """The PDF page rendered with pypdfium2, as an SVG of the page's size (in
+    points) holding one PNG image."""
+    try:
+        import pypdfium2
+    except ImportError as e:
+        raise ImportError('PDF panels need pypdfium2 (pip install pypdfium2) or, to keep '
+                          'them vector, PyMuPDF (pip install pymupdf)') from e
+    import base64
+    pdf = pypdfium2.PdfDocument(path)
+    try:
+        if len(pdf) == 0:
+            raise ValueError(f'{path} has no pages')
+        pg = pdf[min(max(0, int(page)), len(pdf) - 1)]
+        try:
+            w_pt, h_pt = pg.get_size()
+            scale = PDF_RASTER_DPI / 72.0
+            if w_pt * h_pt * scale * scale > PDF_RASTER_MAX_PIXELS:
+                scale = (PDF_RASTER_MAX_PIXELS / (w_pt * h_pt)) ** 0.5
+            bitmap = pg.render(scale=scale)
+            pil = bitmap.to_pil().convert('RGB')
+            bitmap.close()
+        finally:
+            pg.close()
+    finally:
+        pdf.close()
+    buf = io.BytesIO()
+    pil.save(buf, format='PNG')
+    data = base64.b64encode(buf.getvalue()).decode('ascii')
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+           f'width="{w_pt:g}" height="{h_pt:g}" viewBox="0 0 {w_pt:g} {h_pt:g}">'
+           f'<image x="0" y="0" width="{w_pt:g}" height="{h_pt:g}" '
+           f'xlink:href="data:image/png;base64,{data}"/></svg>')
     return svg.encode('utf-8')
 
 
