@@ -6,18 +6,22 @@ for drawing and sizing, ``typeset(doc)`` returns a copy in which every
 path from Matplotlib's mathtext, at the size and colour of the surrounding
 text. ``\\$`` stays a literal dollar.
 
-Fonts: the maths uses the label's own font family for letters when Matplotlib
-knows it ("custom" mathtext fontset), so italic variables match the text; else
-STIX sans (or STIX for serif fonts). The figure looks the same on every
-computer: no TeX installation is involved (the LaTeX export still hands the
-$…$ to LaTeX itself).
+Engines (label_math_engine): with a LaTeX installation each formula is typeset
+by LaTeX itself — full LaTeX: siunitx, bm, any amsmath construct — in Latin
+Modern (sans-serif maths for sans-serif labels), and kept as an SVG in the
+caches of batoolset.latex_tools (PyFigures puts the figure's own
+``equations/labels`` folder first, so the formulas travel with the figure and
+render identically on computers without TeX). Otherwise Matplotlib's mathtext
+is used, with the label's own font family for letters when Matplotlib knows it
+("custom" fontset), else STIX sans (or STIX for serif fonts). The LaTeX export
+still hands the $…$ to LaTeX itself.
 """
 from __future__ import annotations
 
 import functools
 import re
 
-from qtpy.QtCore import QPointF, QSizeF, Qt
+from qtpy.QtCore import QPointF, QRectF, QSizeF, Qt
 from qtpy.QtGui import (QColor, QFont, QFontInfo, QFontMetricsF, QPainterPath, QTextCharFormat,
                         QTextCursor, QTextDocument, QTextFormat)
 
@@ -104,20 +108,70 @@ def _em_px(font: QFont) -> float:
     return float(info.pixelSize() or 12)
 
 
+def label_math_engine():
+    """"auto" (default: LaTeX when installed, or when the formula was already
+    typeset by LaTeX and is cached; else mathtext), "latex" or "mathtext"
+    (environment variable PYFIGURES_LABEL_MATH)."""
+    import os
+    value = (os.environ.get("PYFIGURES_LABEL_MATH") or "auto").strip().lower()
+    return value if value in ("auto", "latex", "mathtext") else "auto"
+
+
+_SERIF_HINTS = ("times", "serif", "roman", "georgia", "garamond", "palatino", "computer modern",
+                "cmu", "latin modern", "baskerville", "cambria", "book")
+
+
+@functools.lru_cache(maxsize=256)
+def _svg_renderer(path):
+    from qtpy.QtSvg import QSvgRenderer
+    return QSvgRenderer(path)
+
+
+def _latex_math(tex, font, color):
+    """(svg path, width, height, depth) in points from the LaTeX installation
+    or its caches (batoolset.latex_tools), or None (-> mathtext)."""
+    engine = label_math_engine()
+    if engine == "mathtext":
+        return None
+    try:
+        from batoolset import latex_tools as LT
+    except ImportError:
+        return None
+    size_pt = font.pointSizeF() if font.pointSizeF() > 0 else _em_px(font) * 0.75
+    family = (font.family() or "").lower()
+    sans = "sans" in family or not any(h in family for h in _SERIF_HINTS)
+    return LT.inline_math_svg(tex, round(size_pt, 2), sans=sans, color=color.name(),
+                              compile_missing=LT.latex_available())
+
+
 class MathObject(_TextObjectBase):
     """Draws the formula stored in an object character's format. Placed with
     Qt's AlignMiddle (centred half an x-height above the baseline, i.e. on the
     maths axis), its box sized so the formula's own baseline lands on the text
-    baseline."""
+    baseline. Typeset by LaTeX when available (label_math_engine), else by
+    Matplotlib's mathtext."""
 
     def _geometry(self, fmt):
-        font = _char_format(fmt).font()
-        tex = fmt.property(PROP_TEX)
-        path, width, ascent, descent = math_path(str(tex), round(_em_px(font), 3), font.family())
+        cf = _char_format(fmt)
+        font = cf.font()
+        tex = str(fmt.property(PROP_TEX))
+        brush = cf.foreground()
+        color = brush.color() if brush.style() != Qt.BrushStyle.NoBrush else QColor("black")
+        em = _em_px(font)
+        latex = _latex_math(tex, font, color)
+        if latex is not None:
+            svg, w_pt, h_pt, d_pt = latex
+            size_pt = font.pointSizeF() if font.pointSizeF() > 0 else em * 0.75
+            k = em / max(size_pt, 1e-6)                          # px per pt, as the text uses
+            drawing = ("svg", svg, w_pt * k, h_pt * k, d_pt * k)
+            width, ascent, descent = w_pt * k, h_pt * k, d_pt * k
+        else:
+            path, width, ascent, descent = math_path(tex, round(em, 3), font.family())
+            drawing = ("path", path, color)
         half_x = QFontMetricsF(font).xHeight() / 2.0
         # Qt (AlignMiddle): object ascent = (h + half_x) / 2, descent = (h - half_x) / 2
         height = max(2 * ascent - half_x, 2 * descent + half_x, 1.0)
-        return path, width, height, (height + half_x) / 2.0
+        return drawing, width, height, (height + half_x) / 2.0
 
     # Qt calls these two from C++: an exception escaping them aborts the
     # process (PyQt), so a formula that cannot be typeset is left empty
@@ -131,13 +185,16 @@ class MathObject(_TextObjectBase):
 
     def drawObject(self, painter, rect, doc, pos, fmt):
         try:
-            path, _, _, baseline = self._geometry(fmt)
-            brush = _char_format(fmt).foreground()
-            color = brush.color() if brush.style() != Qt.BrushStyle.NoBrush else QColor("black")
+            drawing, _, _, baseline = self._geometry(fmt)
             painter.save()
             try:
                 painter.translate(rect.left(), rect.top() + baseline)
-                painter.fillPath(path, color)
+                if drawing[0] == "svg":
+                    _, svg, w, h, d = drawing
+                    # the SVG's baseline is y = 0: its box spans [-h, +d]
+                    _svg_renderer(svg).render(painter, QRectF(0.0, -h, w, h + d))
+                else:
+                    painter.fillPath(drawing[1], drawing[2])
             finally:
                 painter.restore()
         except Exception:
