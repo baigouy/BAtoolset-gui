@@ -63,6 +63,18 @@ class TAText2D(Rectangle2D):
         # if y is not None:
         #     self.setY(y)
 
+    def _layout_doc(self):
+        """The document that is drawn and measured: self.doc with its $…$
+        typeset as maths (batoolset.drawings.math_text), or self.doc itself.
+        self.doc keeps the raw text: it is what is saved and edited."""
+        # (cached in math_text, never on self: self is saved and copied)
+        try:
+            from batoolset.drawings.math_text import typeset_for
+            return typeset_for(self, self.doc)
+        except Exception:
+            logger.error('could not typeset the maths in "' + self.doc.toPlainText() + '"')
+            return self.doc
+
     def set_range(self, range):
         # this is the range of labels in text rows
         self.range = range
@@ -160,8 +172,8 @@ class TAText2D(Rectangle2D):
 
                 # all seems to be fixed now but allI do here is totally crazy -−> DO A CLEAN FIX OF THE STUFF SOME DAY
                 rect2 =QRectF(rect_to_plot.x(), rect_to_plot.y(), rect_to_plot.width(), rect_to_plot.height())
-                text_width = self.doc.documentLayout().documentSize().width()
-                text_height = self.doc.documentLayout().documentSize().height()
+                text_width = self._layout_doc().documentLayout().documentSize().width()
+                text_height = self._layout_doc().documentLayout().documentSize().height()
                 # very dirty fix I have to fix all more poperly some day this is totally abnormal that I have to do all of this !!! --< now that fixes the size but not the position --> somehow I am missing something still
                 rect2.setWidth(text_width)
                 rect2.setHeight(text_height)
@@ -230,8 +242,8 @@ class TAText2D(Rectangle2D):
 
 
             if True:
-                text_width = self.doc.documentLayout().documentSize().width()
-                text_height = self.doc.documentLayout().documentSize().height()
+                text_width = self._layout_doc().documentLayout().documentSize().width()
+                text_height = self._layout_doc().documentLayout().documentSize().height()
                 # print('text_width, text_height',text_width, text_height, rect_to_plot, 'BINGO BINGO2')
                 painter.translate((rect_to_plot.width()-text_width)/2, (rect_to_plot.height()-text_height)/2) # le bug est bien ici --> somehow the rect is still not correct and wrongly scaled --> what is the bug ?
 
@@ -266,7 +278,7 @@ class TAText2D(Rectangle2D):
             # print(f"Current rotation angle: {rotation_angle:.2f} degrees")
             # print(self.text_orientation, '-->',get_angle(self.text_orientation)) # NO BUG IS THERE YET RANDOM ....
             # painter.resetTransform()
-            self.doc.drawContents(painter)
+            self._layout_doc().drawContents(painter)
 
 
 
@@ -290,7 +302,7 @@ class TAText2D(Rectangle2D):
         return self
 
     def getSize(self): # is that ok ???
-        return self.doc.size()
+        return self._layout_doc().size()
 
     def getWidth(self):
         return self.boundingRect().width()
@@ -310,8 +322,8 @@ class TAText2D(Rectangle2D):
     def getRect(self,*args, **kwargs):
         # print('self.scale of the text', self.scale)
 
-        text_width = self.doc.documentLayout().documentSize().width()
-        text_height = self.doc.documentLayout().documentSize().height()
+        text_width = self._layout_doc().documentLayout().documentSize().width()
+        text_height = self._layout_doc().documentLayout().documentSize().height()
         # if args:
         if args or kwargs:
             rect = QRectF(self.x()*self.scale, self.y()*self.scale, text_width, text_height)
