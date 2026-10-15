@@ -430,7 +430,11 @@ class Image2D(Rectangle2D):
                 print('Script output:\n',self.script_log)
         if custom_loading_script and self.img is not None:
             # TODO --> avoid code duplication!!! --> TODO -> split my code into plenty of stuff
-            if isinstance(self.img, plt.Figure):
+            if isinstance(self.img, str):
+                # a vector file made by the script (e.g. latex(...)): shown like a
+                # dropped PDF/SVG, the panel keeps its own filename (re-run on load)
+                self._show_script_file(self.img)
+            elif isinstance(self.img, plt.Figure):
                 super(Image2D, self).__init__(get_fig_rect(self.img))
                 self.setFigure(self.img)
             if isinstance(self.img, np.ndarray):
@@ -2154,6 +2158,18 @@ class Image2D(Rectangle2D):
             if restore_painter_in_the_end:
                 painter.restore()
 
+    def _show_script_file(self, path):
+        """Show the PDF/SVG file a panel script produced (e.g. latex(...)): the
+        panel keeps its own filename, since the script makes the file again."""
+        if not (os.path.isfile(path) and path.lower().endswith(('.pdf', '.svg'))):
+            self.script_log = (self.script_log or '') + f'\nnot a PDF or SVG file: {path}'
+            self.img = None
+            return
+        source = self.filename
+        super(Image2D, self).__init__(0, 0, 0, 0)
+        self.setFigure(path)
+        self.filename = source
+
     def setFigure(self, figure):
         self.must_update_figure_on_first_paint = False
 
@@ -2816,6 +2832,15 @@ painter.setRenderHints(Qt.SmoothPixmapTransform | Qt.HighQualityAntialiasing)
 
         # If an exception occurs, capture it and include it in the output
         local_namespace = {'plt': plt, 'Img': Img, 'np':np} # all imports should be made there (otherwise the user needs to do the imports himslef --> painful though
+        # PyFigures' helpers (latex(code) -> a vector panel), when it is installed
+        try:
+            from pyfigures.script_helpers import HELPERS
+            local_namespace.update(HELPERS)
+        except ImportError:
+            pass
+        if isinstance(code, str) and code.lstrip().startswith(('\\', '%')):
+            # the script is LaTeX code itself (Python never starts like that)
+            code = 'self.img = latex(' + repr(code) + ')'
         try:
             if self.filename and (self.filename.strip().startswith("['") and self.filename.strip().endswith("']")):
                 self.filename = reload_string_list(self.filename)
