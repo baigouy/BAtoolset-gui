@@ -35,6 +35,7 @@ import sys
 import io
 from batoolset.tools.logger import TA_logger
 import ast
+import copy
 import re
 
 logger = TA_logger()
@@ -199,7 +200,7 @@ class Image2D(Rectangle2D):
     _skip_sized_scripts = False
 
     # min = None, max = None,
-    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65,**kwargs):
+    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, **kwargs):
 
         # print('args',args)
         # if kwargs:
@@ -305,6 +306,11 @@ class Image2D(Rectangle2D):
         # if the image is inserted as an inset then draw it as a fraction of parent width
         # inset parameters
         self.fraction_of_parent_image_width_if_image_is_inset = fraction_of_parent_image_width_if_image_is_inset
+        # a zoom callout's magnified inset shows the parent's own pixels: it then
+        # takes the parent's display settings (LUTs, channels, …), see _sync_display_from_parent
+        if isinstance(follow_parent_display, str):
+            follow_parent_display = follow_parent_display.strip().lower() == 'true'
+        self.follow_parent_display = bool(follow_parent_display)
         self.border_size = border_size  # no border by default
         self.border_color = border_color  # white border by default
         self.filename = filename
@@ -2225,6 +2231,35 @@ class Image2D(Rectangle2D):
             logger.error(
                 'The provided figure is not a valid matplotlib figure nor a valid svg file! Nothing can be done with it... Sorry...')
 
+    # what a zoom callout's inset copies from its parent (the display of the same pixels)
+    _PARENT_DISPLAY_ATTRS = ('LUTs', 'channels', 'normalization', 'projection',
+                             'projection_z_start', 'projection_z_end', 'dimensions',
+                             'lower_indices', 'upper_indices', 'lower_values', 'upper_values')
+
+    def _sync_display_from_parent(self, parent):
+        """For a zoom callout's inset (follow_parent_display): show the parent's
+        pixels the way the parent shows them, also after the parent's LUTs,
+        channels or display range change. Returns True if anything changed."""
+        if not getattr(self, 'follow_parent_display', False):
+            return False
+        changed = False
+        for attr in self._PARENT_DISPLAY_ATTRS:
+            value = getattr(parent, attr, None)
+            mine = getattr(self, attr, None)
+            try:
+                same = bool(np.array_equal(np.asarray(mine, dtype=object), np.asarray(value, dtype=object)))
+            except Exception:
+                same = repr(mine) == repr(value)
+            if not same:
+                setattr(self, attr, copy.deepcopy(value))
+                changed = True
+        if changed and getattr(self, 'img', None) is not None and not isinstance(self.img, QRectF):
+            try:
+                self.update_qimage()
+            except Exception:
+                traceback.print_exc()
+        return changed
+
     def _update_inset_scale(self, parent):
         """For an inset: set its scale so it is drawn
         fraction_of_parent_image_width_if_image_is_inset x the parent's displayed
@@ -2251,6 +2286,7 @@ class Image2D(Rectangle2D):
                         extra.unit_to_pixel_conversion_factor = self.px_to_unit_conversion_factor
                         extra.update_bar_at_scale(self.scale)
                     if isinstance(extra, Image2D):
+                        extra._sync_display_from_parent(self)
                         # size the inset BEFORE placing it: its scale used to be
                         # set only while drawing, so placement used the stale
                         # stored scale — a single-pass render (export) put a
