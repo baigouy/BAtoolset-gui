@@ -53,6 +53,15 @@ def _normalize_to_uint8(arr, mn, mx):
     # overflows to inf and turns the whole output into NaN
     mn = float(mn)
     mx = float(mx)
+    if not (np.isfinite(mn) and np.isfinite(mx)) and arr.dtype.kind == 'f':
+        # NaN / ±inf pixels (masked or saturated float data) made the range
+        # NaN or infinite and the whole image black: use the finite pixels
+        finite = arr[np.isfinite(arr)]
+        if finite.size:
+            if not np.isfinite(mn):
+                mn = float(finite.min())
+            if not np.isfinite(mx):
+                mx = float(finite.max())
     if not (np.isfinite(mn) and np.isfinite(mx)) or mx <= mn:
         return np.zeros(arr.shape, dtype=np.uint8)
     scale = 255.0 / (mx - mn)

@@ -149,6 +149,18 @@ def object_to_xml(obj, element=None, keys_to_ignore=['img','renderer','doc','qim
     reparsed = xml.dom.minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")
 
+def _report_failed_object(obj_type):
+    """Say WHY an object could not be rebuilt (its parameters alone hid a
+    layout ZeroDivisionError that dropped a whole group — most of a figure).
+    Never raises, also on a console that cannot show the traceback's text."""
+    import traceback
+    msg = f'ERROR deserialization: {obj_type} could not be rebuilt:\n{traceback.format_exc()}'
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode('ascii', 'backslashreplace').decode('ascii'))
+
+
 def create_objects_from_dict(objects_dict):
     annotations = []
 
@@ -162,7 +174,7 @@ def create_objects_from_dict(objects_dict):
                 else:
                     annotations.append(create_object(obj_type, parameters))
             except Exception:
-                print(f'ERROR deserialization: {obj_type} with parameters {parameters}') # ok that is my error when there are many objects of the same type
+                _report_failed_object(obj_type)
     else:
         # dirty hack to recover annotations in the right order
         for dct in objects_dict: # big pb it does not save and store the right index of the object in the list -−> see how I  can do that and preserve it to sort them back
@@ -174,7 +186,7 @@ def create_objects_from_dict(objects_dict):
                 else:
                     annotations.append(create_object(obj_type, parameters))
             except Exception:
-                print(f'ERROR deserialization: {obj_type} with parameters {parameters}') # ok that is my error when there are many objects of the same type
+                _report_failed_object(obj_type)
     return annotations
 
 def clone_object(objects, auto_unpack_if_single=True, overrides=None): # overrides offers the possibility to mutate one of the parameters of the clone!

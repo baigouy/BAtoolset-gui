@@ -311,8 +311,15 @@ class Group(Rectangle2D):
         # if size is not None:
         self.size = size # maybe useful and I need to store that ??? -−> the good thing is that it will not change and so it is better
         # set_to_size(self,size) # shall I use that ??? --> maybe ...
-        self.set_to_size(self.size) # very good but maybe I also need to update it
-        set_to_width(self, self.size) # for now force size in x only to simplify things
+        try:
+            self.set_to_size(self.size) # very good but maybe I also need to update it
+            set_to_width(self, self.size) # for now force size in x only to simplify things
+        except (ArithmeticError, ValueError):
+            # panels squeezed to nothing (too many gaps for the width, very
+            # deep nesting): the layout divides by zero. The group used to be
+            # dropped by the loader — most of a figure gone on open, and lost
+            # on the next save. Keep it, with its content as saved.
+            traceback.print_exc()
         Group._count += 1
         self.ID = Group._count
         self.fill_color = fill_color
