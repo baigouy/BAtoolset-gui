@@ -197,6 +197,10 @@ class ClippingSvgRenderer(QSvgRenderer):
         if rect.isEmpty() and rect.width() == 0 and rect.height() == 0:
             return
         target = self._to_target.mapRect(rect)
+        if clip is not None and clip.contains(rect):
+            # the clip cuts nothing (Matplotlib clips every artist to its axes):
+            # draw it plainly, so an SVG output keeps it as a vector shape
+            clip = None
         if clip is None:
             super().render(painter, el_id, target)
         elif not self._svg_output:

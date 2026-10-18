@@ -198,6 +198,10 @@ class Image2D(Rectangle2D):
     # headless layout recompute so re-laying out a figure never runs (possibly
     # untrusted, possibly slow) panel code; the script itself is preserved.
     _skip_sized_scripts = False
+    # When True (editable PowerPoint / Illustrator export), Matplotlib plots are
+    # exported with their text as real text (svg.fonttype 'none') instead of
+    # glyph outlines, so tick labels and axis titles stay editable there.
+    _export_editable_text = False
 
     # min = None, max = None,
     def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, **kwargs):
@@ -442,6 +446,9 @@ class Image2D(Rectangle2D):
                 self._show_script_file(self.img)
             elif isinstance(self.img, plt.Figure):
                 super(Image2D, self).__init__(get_fig_rect(self.img))
+                # keep the saved position: the figure rect starts at 0,0, so a
+                # scripted panel (plot) jumped to the origin when reopened
+                self.moveTo(x if x is not None else 0, y if y is not None else 0)
                 self.setFigure(self.img)
             if isinstance(self.img, np.ndarray):
                 # print('setting new stuff here')
@@ -452,7 +459,7 @@ class Image2D(Rectangle2D):
                 # self.setHeight(self.qimage.height())
                 # self.setWidth(w)
                 # self.setHeight(h)
-                super(Image2D, self).__init__(0,0, w, h)
+                super(Image2D, self).__init__(x if x is not None else 0, y if y is not None else 0, w, h)
         try:
             self.__init_called__
         except Exception:
@@ -1614,6 +1621,8 @@ class Image2D(Rectangle2D):
                 # settings the plot was made with (e.g. LaTeX text: text.usetex and its
                 # preamble are read when the plot is drawn, not when it is made)
                 rc_overrides = {**(getattr(self.img, '_pyf_rc', None) or {}), **rc_overrides}
+                if bufferType != 'raster' and Image2D._export_editable_text:
+                    rc_overrides['svg.fonttype'] = 'none'
                 from batoolset.matplolibs.tools import figure_pad_inches
                 pad = figure_pad_inches(self.img)  # same pad get_fig_rect sized the panel with
                 with mpl.rc_context(rc_overrides):
@@ -1720,14 +1729,23 @@ class Image2D(Rectangle2D):
     def enter_export_mode(self):
         """Temporarily rebuild the renderer with publication style for export."""
         self._export_original_renderer = None
-        if not getattr(self, 'publication_style', False):
+        editable_plot = Image2D._export_editable_text and isinstance(getattr(self, 'img', None), plt.Figure)
+        if not getattr(self, 'publication_style', False) and not editable_plot:
             return
         if isinstance(getattr(self, 'img', None), plt.Figure):
-            buf = self._toBuffer(bufferType='svg', apply_publication=True)
+            buf = self._toBuffer(bufferType='svg', apply_publication=bool(getattr(self, 'publication_style', False)))
             if buf is not None:
                 self._export_original_renderer = self.renderer
-                self.renderer = _make_svg_renderer(buf.read())
+                data = buf.read()
                 buf.close()
+                renderer = None
+                if editable_plot:
+                    # the plot's text drawn as text (editable PowerPoint / Illustrator)
+                    from batoolset.drawings.svg_text_renderer import make_text_renderer
+                    renderer = make_text_renderer(data, make_renderer=_make_svg_renderer)
+                    if renderer is not None:
+                        renderer.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+                self.renderer = renderer if renderer is not None else _make_svg_renderer(data)
         elif isinstance(getattr(self, 'img', None), QSvgRenderer):
             raw = getattr(self, '_raw_svg_bytes', None)
             # a PDF (a finished plot) keeps its own line widths; its text is outlines anyway
