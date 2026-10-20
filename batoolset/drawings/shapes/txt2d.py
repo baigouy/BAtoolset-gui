@@ -18,6 +18,20 @@ from batoolset.drawings.shapes.rectangle2d import Rectangle2D
 from batoolset.tools.logger import TA_logger
 logger = TA_logger()
 
+
+def draw_document(doc, painter):
+    """doc.drawContents(painter), but text with no colour of its own is black:
+    drawContents takes it from the application palette, so on a dark UI theme
+    (or Windows in dark mode) figure labels came out light grey on a white
+    page, in exports too. A figure must not depend on the UI theme."""
+    from qtpy.QtGui import QAbstractTextDocumentLayout, QPalette
+    ctx = QAbstractTextDocumentLayout.PaintContext()
+    palette = QPalette(ctx.palette)
+    palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+    ctx.palette = palette
+    doc.documentLayout().draw(painter, ctx)
+
+
 class TAText2D(Rectangle2D):
 
     # TODO add bg to it so that it can be drawn
@@ -278,7 +292,7 @@ class TAText2D(Rectangle2D):
             # print(f"Current rotation angle: {rotation_angle:.2f} degrees")
             # print(self.text_orientation, '-->',get_angle(self.text_orientation)) # NO BUG IS THERE YET RANDOM ....
             # painter.resetTransform()
-            self._layout_doc().drawContents(painter)
+            draw_document(self._layout_doc(), painter)
 
 
 

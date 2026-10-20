@@ -164,6 +164,10 @@ def _report_failed_object(obj_type):
 def create_objects_from_dict(objects_dict):
     annotations = []
 
+    if isinstance(objects_dict, OrderedChildren):
+        # mixed tags (groups and images): rebuild them in document order
+        objects_dict = [{tag: value} for tag, value in objects_dict.order]
+
     if isinstance(objects_dict, dict):
 
         for obj_type, parameters in objects_dict.items(): # big pb it does not save and store the right index of the object in the list -−> see how I  can do that and preserve it to sort them back
@@ -375,10 +379,10 @@ def element_to_dict(element):
     """{tag: value} of the children of *element* (a repeated tag gives a list).
 
     When different tags are INTERLEAVED (a figure's top level or a group's
-    content: Group, Image2D, Group...) a dict would put all the Groups before
-    all the Image2Ds and the figure came back reordered (undo, reopen). Such
-    elements are returned as an ordered list of one-key dicts instead, which
-    create_objects_from_dict() reads in document order."""
+    content: Group, Image2D, Group...) a plain dict puts all the Groups
+    before all the Image2Ds and the figure came back reordered (undo,
+    reopen). Such elements are returned as an OrderedChildren: the same dict
+    plus the document order, which create_objects_from_dict() follows."""
     properties = {}
     ordered = []
     interleaved = False
@@ -462,8 +466,18 @@ def element_to_dict(element):
             properties[tag] = value
 
     if interleaved:
-        return [{tag: value} for tag, value in ordered]
+        return OrderedChildren(properties, ordered)
     return properties
+
+
+class OrderedChildren(dict):
+    """{tag: value(s)} like any element_to_dict result (callers reading it
+    as a dict are unchanged), plus ``.order``: the children as (tag, value)
+    in document order, which create_objects_from_dict() follows."""
+
+    def __init__(self, properties, order):
+        super().__init__(properties)
+        self.order = list(order)
 
 
 def has_custom_script(xml_string):
