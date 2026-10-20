@@ -372,7 +372,16 @@ def element_to_dict_neo(element):
     return properties
 
 def element_to_dict(element):
+    """{tag: value} of the children of *element* (a repeated tag gives a list).
+
+    When different tags are INTERLEAVED (a figure's top level or a group's
+    content: Group, Image2D, Group...) a dict would put all the Groups before
+    all the Image2Ds and the figure came back reordered (undo, reopen). Such
+    elements are returned as an ordered list of one-key dicts instead, which
+    create_objects_from_dict() reads in document order."""
     properties = {}
+    ordered = []
+    interleaved = False
 
     for child in element:
         tag = child.tag
@@ -437,6 +446,9 @@ def element_to_dict(element):
         # if tag == 'annotations':
         #     print('annotations--> ',tag, value)
         # properties[tag] = value # if it contains it already it will override it --> that is the error
+        if tag in properties and ordered and ordered[-1][0] != tag:
+            interleaved = True
+        ordered.append((tag, value))
         # Check if tag already exists in properties
         if tag in properties:
             # If tag already exists, check if the value is a list
@@ -449,6 +461,8 @@ def element_to_dict(element):
             # If tag does not exist, add it with the new value
             properties[tag] = value
 
+    if interleaved:
+        return [{tag: value} for tag, value in ordered]
     return properties
 
 

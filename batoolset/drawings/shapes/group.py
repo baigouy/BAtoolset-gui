@@ -302,8 +302,10 @@ class Group(Rectangle2D):
                     if arg is not None:
                         self.content.append(arg)
 
-        if isinstance(content, dict):
-            # Reload content from serialized object
+        if isinstance(content, dict) or (isinstance(content, list) and content
+                                         and all(isinstance(c, dict) for c in content)):
+            # Reload content from serialized object (a list of one-key dicts
+            # keeps the order of mixed groups and images)
             content = create_objects_from_dict(content)
             self.content.extend(content)
 
