@@ -89,6 +89,39 @@ class TAText2D(Rectangle2D):
             logger.error('could not typeset the maths in "' + self.doc.toPlainText() + '"')
             return self.doc
 
+    def _letter_ink_shift(self):
+        """How far up a plain top letter is drawn so that its ink top sits where
+        a letter with an ascender ('b', 'B') would: the line box leaves room
+        above 'a', 'c', 'e'..., which then looked lower than 'b' in the corner.
+        0 for other texts, letters on a box (centred in it) and bottom letters
+        (aligned on the baseline)."""
+        if not getattr(self, 'is_letter', False) or self.fill_color is not None:
+            return 0.
+        if self.placement is None or not self.placement.check_position('top'):
+            return 0.
+        if (self.text_orientation is not None and 'X' not in self.text_orientation) or self.theta:
+            return 0.
+        doc = self._layout_doc()
+        text = doc.toPlainText().strip()
+        if not text:
+            return 0.
+        from qtpy.QtGui import QFontMetricsF, QTextCursor
+        cursor = QTextCursor(doc)
+        cursor.setPosition(1)
+        font = cursor.charFormat().font()
+        key = (text, font.toString())
+        cache = TAText2D._ink_shift_cache
+        if key not in cache:
+            fm = QFontMetricsF(font)
+            reference = 'B' if text.isupper() else 'b'
+            shift = fm.tightBoundingRect(text).top() - fm.tightBoundingRect(reference).top()
+            # in line-box units: the document is laid out at its own resolution
+            cache[key] = max(0., shift) / fm.height() if fm.height() else 0.
+        line = doc.documentLayout().blockBoundingRect(doc.firstBlock()).height()
+        return cache[key] * line
+
+    _ink_shift_cache = {}
+
     def set_range(self, range):
         # this is the range of labels in text rows
         self.range = range
@@ -292,6 +325,7 @@ class TAText2D(Rectangle2D):
             # print(f"Current rotation angle: {rotation_angle:.2f} degrees")
             # print(self.text_orientation, '-->',get_angle(self.text_orientation)) # NO BUG IS THERE YET RANDOM ....
             # painter.resetTransform()
+            painter.translate(0, -self._letter_ink_shift())
             draw_document(self._layout_doc(), painter)
 
 
