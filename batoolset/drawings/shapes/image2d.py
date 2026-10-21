@@ -198,6 +198,12 @@ def _make_svg_renderer(source):
         pass
     return r
 
+
+# gap (figure units = px at 100 %) between a panel's edge and the letters,
+# labels and scale bars pinned to it
+EDGE_MARGIN = 2
+
+
 class Image2D(Rectangle2D):
     # When True, skip pixel loading in __init__ (used for non-blocking DND deserialization).
     # Call load_img() later on each object to load pixel data.
@@ -2325,15 +2331,18 @@ class Image2D(Rectangle2D):
                         except Exception:
                             pos = None
                         if pos:
+                            # letters, labels, scale bars... keep a small gap from
+                            # the edges they are pinned to; an inset sits flush
+                            m = 0 if isinstance(extra, Image2D) else EDGE_MARGIN
                             if extra.placement.check_position('top'):
-                                extra.setTopLeft(extra.x(), self.topLeft().y())
+                                extra.setTopLeft(extra.x(), self.topLeft().y() + m)
                             if extra.placement.check_position('left'):
-                                extra.setTopLeft(self.topLeft().x(), extra.y())
+                                extra.setTopLeft(self.topLeft().x() + m, extra.y())
                             if extra.placement.check_position('right'):
-                                extra.setTopLeft(self.x() + self.width(all=True) - extra.width(all=True), extra.y())
+                                extra.setTopLeft(self.x() + self.width(all=True) - extra.width(all=True) - m, extra.y())
                             if extra.placement.check_position('bottom'):
                                 extra.setTopLeft(extra.x(), self.topLeft().y() + self.height(all=True) - extra.height(
-                                    all=True))
+                                    all=True) - m)
                             if extra.placement.check_position('center_h'):
                                 extra.setTopLeft(
                                     self.x() + self.width(all=True) / 2. - extra.width(all=True) / 2., extra.y())
