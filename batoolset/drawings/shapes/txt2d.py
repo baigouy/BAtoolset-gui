@@ -90,11 +90,12 @@ class TAText2D(Rectangle2D):
             return self.doc
 
     def _letter_ink_shift(self):
-        """How far up a plain top letter is drawn so that its ink top sits where
-        a letter with an ascender ('b', 'B') would: the line box leaves room
-        above 'a', 'c', 'e'..., which then looked lower than 'b' in the corner.
-        0 for other texts, letters on a box (centred in it) and bottom letters
-        (aligned on the baseline)."""
+        """How far up a plain top letter is drawn so that its ink top is the top
+        of its box: the line box leaves room above every letter (more above
+        'a', 'c', 'e'... than above 'b'), so letters sat low in the corner and
+        not all at the same height. The gap to the panel edge is then
+        image2d.EDGE_MARGIN, as on the left. 0 for other texts, letters on a
+        box (centred in it) and bottom letters (aligned on the baseline)."""
         if not getattr(self, 'is_letter', False) or self.fill_color is not None:
             return 0.
         if self.placement is None or not self.placement.check_position('top'):
@@ -113,8 +114,8 @@ class TAText2D(Rectangle2D):
         cache = TAText2D._ink_shift_cache
         if key not in cache:
             fm = QFontMetricsF(font)
-            reference = 'B' if text.isupper() else 'b'
-            shift = fm.tightBoundingRect(text).top() - fm.tightBoundingRect(reference).top()
+            # ink top below the line top (the baseline is fm.ascent() down)
+            shift = fm.tightBoundingRect(text).top() + fm.ascent()
             # in line-box units: the document is laid out at its own resolution
             cache[key] = max(0., shift) / fm.height() if fm.height() else 0.
         line = doc.documentLayout().blockBoundingRect(doc.firstBlock()).height()
