@@ -495,7 +495,12 @@ class Image2D(Rectangle2D):
                     self.img = template_rect
 
         # THIS SHOULD ALWAYS BE AT THE VERY END OTHERWISE SUPER OVERRIDES THE VALUES --> PROBABLY NEED TO DO IT IN A SMARTER WAY BUT OK FOR NOW !!!!
-        self.opacity = 1
+        # the opacity given (it was always reset to 1: an opacity saved in a .pyf
+        # or set through the MCP server was lost on reload)
+        try:
+            self.opacity = min(1., max(0., float(opacity))) if opacity is not None else 1.
+        except (TypeError, ValueError):
+            self.opacity = 1.
         self.scale = scale
         self.translation = QPointF()
         self.fill_color = fill_color  # can be used to define a bg color for rotated images (and or transparent images...)
