@@ -315,6 +315,11 @@ class Image2D(Rectangle2D):
         elif isinstance(annotations, list) and len(annotations)>0:
             if isinstance(annotations[0], dict):
                 annotations = create_objects_from_dict(annotations)
+        # an empty <annotations/> in a .pyf is read back as '' (or '[]', 'None'):
+        # adding a letter then called ''.insert (seen after deleting a panel's
+        # last annotation and reopening)
+        if isinstance(annotations, str) and annotations.strip() in ('', '[]', 'None'):
+            annotations = []
 
         self.annotations=annotations
         if isinstance(placement, str):
@@ -2332,8 +2337,11 @@ class Image2D(Rectangle2D):
                             pos = None
                         if pos:
                             # letters, labels, scale bars... keep a small gap from
-                            # the edges they are pinned to; an inset sits flush
-                            m = 0 if isinstance(extra, Image2D) else EDGE_MARGIN
+                            # the edges they are pinned to; an inset sits flush, and
+                            # so does a text on a filled box (the box left an ugly
+                            # gap to the image edge)
+                            boxed = isinstance(extra, TAText2D) and getattr(extra, 'fill_color', None) is not None
+                            m = 0 if isinstance(extra, Image2D) or boxed else EDGE_MARGIN
                             if extra.placement.check_position('top'):
                                 extra.setTopLeft(extra.x(), self.topLeft().y() + m)
                             if extra.placement.check_position('left'):
