@@ -219,7 +219,7 @@ class Image2D(Rectangle2D):
     _export_editable_text = False
 
     # min = None, max = None,
-    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, **kwargs):
+    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, flip_h=False, flip_v=False, **kwargs):
 
         # print('args',args)
         # if kwargs:
@@ -335,6 +335,10 @@ class Image2D(Rectangle2D):
         if isinstance(follow_parent_display, str):
             follow_parent_display = follow_parent_display.strip().lower() == 'true'
         self.follow_parent_display = bool(follow_parent_display)
+        # mirroring is part of how the image is drawn (like theta): self.img keeps
+        # the original pixels and only the displayed qimage is flipped
+        self.flip_h = str(flip_h).strip().lower() == 'true' if isinstance(flip_h, str) else bool(flip_h)
+        self.flip_v = str(flip_v).strip().lower() == 'true' if isinstance(flip_v, str) else bool(flip_v)
         self.border_size = border_size  # no border by default
         self.border_color = border_color  # white border by default
         self.filename = filename
@@ -883,6 +887,9 @@ class Image2D(Rectangle2D):
 
             self.qimage = toQimage(image_to_display, normalize=False, dimensions=target_dims, luts=luts)
             # self.qimage = toQimage(image_to_display, dimensions=target_dims, luts=None)
+
+        if self.qimage is not None and (getattr(self, 'flip_h', False) or getattr(self, 'flip_v', False)):
+            self.qimage = self.qimage.mirrored(bool(self.flip_h), bool(self.flip_v))
 
         if __DEBUG_NORMALIZATION__:
             print('~'*30)
@@ -1796,6 +1803,14 @@ class Image2D(Rectangle2D):
 
     def is_template(self):
         return self.filename == '@template@'
+
+    def set_flip(self, flip_h=None, flip_v=None):
+        """Mirror the displayed image left-right (flip_h) and/or top-bottom (flip_v); None keeps that axis."""
+        if flip_h is not None:
+            self.flip_h = bool(flip_h)
+        if flip_v is not None:
+            self.flip_v = bool(flip_v)
+        self.update_qimage()
 
     def set_rotation(self, theta): # by default set it to black or to None --> white could also be useful
         super().set_rotation(theta)
