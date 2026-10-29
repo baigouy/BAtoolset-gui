@@ -286,6 +286,11 @@ class Group(Rectangle2D):
         if isinstance(orientation, str):
             # legacy .pyf files serialize orientation with embedded quotes ('"X"')
             orientation = orientation.strip().strip('\'"') or ORIENTATIONS[0]
+        if isinstance(isText, str) and isText.strip('\'"').lower() in ('above', 'below'):
+            # a label row is always a row (as associate_text_row builds it):
+            # saved vertical, its layout divided by zero and sent every panel
+            # below it to y = 1e30, and the figure could not be exported
+            orientation = 'X'
         self.orientation=orientation
         if args:
             for arg in args:
