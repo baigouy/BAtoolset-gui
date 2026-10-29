@@ -259,7 +259,15 @@ class Image2D(Rectangle2D):
             try:
                 self.normalization = ast.literal_eval(self.normalization)
             except Exception:
-                pass
+                # JSON ('{"per_channel": true}') as older MCP calls stored it:
+                # left as a string the panel was drawn solid white
+                try:
+                    import json
+                    self.normalization = json.loads(self.normalization)
+                except Exception:
+                    pass
+        if not isinstance(self.normalization, dict):
+            self.normalization = None
         self.channels = channels # will store the channel state (active or not)
         if isinstance(self.channels, str):
             try:
