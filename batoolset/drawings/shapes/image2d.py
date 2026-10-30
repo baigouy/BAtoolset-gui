@@ -44,6 +44,26 @@ logger = TA_logger()
 __DEBUG_NORMALIZATION__ = False
 
 
+def _flat_level(value, dtype):
+    """The uint8 grey of a uniform image (min == max, nothing to stretch): its
+    value on the dtype's own scale. A flat image was drawn black whatever its
+    value - a white 255 background came out black."""
+    dtype = np.dtype(dtype)
+    v = float(value)
+    if not np.isfinite(v):
+        return np.uint8(0)
+    if dtype == np.bool_:
+        return np.uint8(255 if v else 0)
+    if dtype.kind in 'ui':
+        info = np.iinfo(dtype)
+        if dtype.kind == 'i':
+            return np.uint8(round(np.clip(v, 0, info.max) / info.max * 255))
+        return np.uint8(round(v / info.max * 255))
+    if 0 <= v <= 1:              # float images are usually 0-1
+        return np.uint8(round(v * 255))
+    return np.uint8(np.clip(round(v), 0, 255))
+
+
 def _normalize_to_uint8(arr, mn, mx):
     """Single-pass normalization of arr to uint8 [0,255] for the display range (mn, mx).
     Integer images go through a lookup table so no full-size float temporary is ever
@@ -1022,8 +1042,8 @@ class Image2D(Rectangle2D):
                 max = image_to_display.max()
 
             if 'range' in self.normalization and self.normalization['range'] == 'custom':
-                min = self.normalization['min_value']
-                max = self.normalization['max_value']
+                min = self.normalization.get('min_value', global_min)
+                max = self.normalization.get('max_value', global_max)
 
 
 
@@ -1053,7 +1073,7 @@ class Image2D(Rectangle2D):
                         # case of a single channel yet global max and min required but for a single channel
                         # case there is a single channel selected --> yet using global max
                         # dirty fix for display overwriting error
-                        if not self.normalization or self.normalization['range']=='all':
+                        if not self.normalization or self.normalization.get('range', 'all') == 'all':
                             max = global_max
                             min = global_min
                     else:
@@ -1066,8 +1086,8 @@ class Image2D(Rectangle2D):
                     if self.normalization is not None:
                         # print('entering')
                         if 'range' in self.normalization and self.normalization['range'] == 'custom':
-                            min = self.normalization['min_value']
-                            max = self.normalization['max_value']
+                            min = self.normalization.get('min_value', global_min)
+                            max = self.normalization.get('max_value', global_max)
                         if 'range' in self.normalization and self.normalization['range'] == 'all':
                             min = global_min
                             max = global_max
@@ -1079,7 +1099,7 @@ class Image2D(Rectangle2D):
                         print('NEXT STEP3', min, max)
 
                     if max == min:
-                        image_to_display = np.zeros(image_to_display.shape, dtype=np.uint8)
+                        image_to_display = np.full(image_to_display.shape, _flat_level(max, self.img.dtype), dtype=np.uint8)
                     else:
                         image_to_display = _normalize_to_uint8(image_to_display, min, max)
                 else:
@@ -1095,25 +1115,25 @@ class Image2D(Rectangle2D):
                         if 'c' in target_dims:
                             normalized = np.empty(image_to_display.shape, dtype=np.uint8)
                         for ccc,ch in enumerate(list_of_true_indices):
-                            if per_channel and self.normalization and self.normalization['range'] == 'display' and 'c' in target_dims:
+                            if per_channel and self.normalization and self.normalization.get('range') == 'display' and 'c' in target_dims:
                                 max = image_to_display[...,ccc].max()
                                 min = image_to_display[...,ccc].min()
-                            if per_channel and ((self.normalization and self.normalization['range'] == 'all') or not self.normalization):
+                            if per_channel and ((self.normalization and self.normalization.get('range', 'all') == 'all') or not self.normalization):
                                 max = self.img[...,ch].max()
                                 min = self.img[...,ch].min()
 
                             if self.normalization is not None:
                                 if 'range' in self.normalization and self.normalization['range'] == 'custom':
-                                    min = self.normalization['min_value']
-                                    max = self.normalization['max_value']
+                                    min = self.normalization.get('min_value', global_min)
+                                    max = self.normalization.get('max_value', global_max)
 
                             if __DEBUG_NORMALIZATION__:
                                 print('selected max min ch', ccc, 'vs',ch, self.img.shape,image_to_display.shape,  min, max, self,list_of_true_indices, target_dims)
                             if max == min:
                                 if 'c' in target_dims:
-                                    normalized[...,ccc] = np.uint8(np.clip(max, 0, 255))
+                                    normalized[...,ccc] = _flat_level(max, self.img.dtype)
                                 else:
-                                    image_to_display = np.zeros(image_to_display.shape, dtype=np.uint8)
+                                    image_to_display = np.full(image_to_display.shape, _flat_level(max, self.img.dtype), dtype=np.uint8)
                             else:
                                 if 'c' in target_dims:
                                     normalized[...,ccc] = _normalize_to_uint8(image_to_display[...,ccc], min, max)
