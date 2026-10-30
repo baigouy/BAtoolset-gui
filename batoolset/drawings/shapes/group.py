@@ -21,7 +21,7 @@ from qtpy.QtGui import QPainter, QColor, QBrush, QPen, QTransform
 from batoolset.figure.alignment import pack2, align2, align_positions
 from batoolset.tests.tools import are_ratios_almost_equal
 from batoolset.drawings.shapes.compute_optimal_size_all_merged import resize_rects_within_total_width, \
-    resize_rects_within_total_height
+    resize_rects_within_total_height, resize_rect_preserve_aspect_ratio
 
 ORIENTATIONS = ["X","Y"] #,"grid"
 
@@ -123,7 +123,42 @@ def get_parent_of_obj(obj, shapes_to_draw):
 #         grp.set_to_size_old(size)
 #         grp.size = size
 
+_MIN_CROSS = 1.  # a row lower than this (too many labels/gaps for its width) is kept at it: no negative scales
+
+
+def _label_extent(label, axis):
+    """Width (axis 'X') or height of a label's text: what it needs."""
+    annotations = getattr(label, 'annotations', None)
+    shape = annotations[0] if annotations else label
+    return shape.width(all=True) if axis == 'X' else shape.height(all=True)
+
+
+def _affine(elm, axis):
+    """(a, b) such that elm's extent along *axis* = a * (its extent across
+    *axis*) + b, as Group.set_to_size lays it out."""
+    if isinstance(elm, Group):
+        if elm.isText:
+            rect = elm.getRect(all=True)
+            return 0., (rect.width() if axis == 'X' else rect.height())
+        return elm._affine(axis)
+    if getattr(elm, 'isText', False):
+        return 0., _label_extent(elm, axis)
+    ar = elm.getAR()
+    return (ar, 0.) if axis == 'X' else (1. / ar, 0.)
+
+
+def _exact(grp):
+    """The group can be laid out in one pass (see Group.set_to_size)."""
+    try:
+        return grp._affine(grp.orientation)[0] > 0
+    except ZeroDivisionError:
+        return False
+
+
 def set_to_size(grp, size, nb_of_repeats=26):
+    if _exact(grp):
+        grp.set_to_size(size)
+        return
     # even at 100 I get a small imprecision -−> maybe forget about that shit and take 26 always # dirty but ok for now -> I have bigger things to fix --> I tried 100 and it is perfect but 10 already seems to be enough --> maybe that is ok then --> even 3 is ok
     # for some reason the stuff needs to be run several times to converge --> maybe some day I'll get the reason but it is ok and does not take time to do so!!!
     for i in range(nb_of_repeats):
@@ -135,14 +170,20 @@ def set_to_width(grp, desired_width, nb_of_repeats=26):
     # in fact that was not so hard to do
     # Calculate the current aspect ratio of the object
 
-    if grp.orientation != 'X':
+    if grp.orientation != 'X' and _exact(grp):
+        grp._layout_cross(desired_width)   # a column: every panel gets that width
+        # the width asked for, not the one reached: squeezed past its 1 px
+        # minimum, a panel makes the group wider, and the next relayout
+        # (undo, reopen) started from that and drifted (monkey seed 122)
+        grp.size = desired_width
+    elif grp.orientation != 'X':
         for i in range(nb_of_repeats):
 
             current_width = grp.getRect(all=True).width()
             current_height = grp.getRect(all=True).height()
 
             # print('falbala',current_width, current_height, desired_width)
-            if current_width < 0 or current_height<0:
+            if current_width <= 0 or current_height <= 0:  # (an empty group is 0 x 0)
                 # TODO --> KEEP DEV NOTE THIS PREVENTS INFINITE LOOPS WITH NEGATIVE VALUES
                 #
                 # current_width = grp.getRect().width()
@@ -162,21 +203,26 @@ def set_to_width(grp, desired_width, nb_of_repeats=26):
             # factor_from_current_width_to_predicted_height = corresponding_desired_height/
 
             grp.set_to_size(desired_height)
-        grp.size = grp.width()
+        grp.size = grp.width() if grp.content else desired_width
 
             # print('aspect_ratio CURRENT CHECK ', aspect_ratio, grp.getRect(), desired_width, desired_height)
     else:
         set_to_size(grp, desired_width, nb_of_repeats=nb_of_repeats)
-        grp.size = grp.width()
+        # (an empty group keeps the width asked for too: 0 wide, it made the
+        # panels added to it later 1 px small)
+        grp.size = desired_width if (_exact(grp) or not grp.content) else grp.width()
 
 def set_to_height(grp, desired_height, nb_of_repeats=26):
-    if grp.orientation != 'Y':
+    if grp.orientation != 'Y' and _exact(grp):
+        grp._layout_cross(desired_height)  # a row: every panel gets that height
+        grp.size = grp.height()
+    elif grp.orientation != 'Y':
         for i in range(nb_of_repeats):
             current_width = grp.getRect(all=True).width()
             current_height = grp.getRect(all=True).height()
 
             # print('falbala',current_width, current_height, desired_width)
-            if current_width < 0 or current_height<0:
+            if current_width <= 0 or current_height <= 0:  # (an empty group is 0 x 0)
                 # TODO --> KEEP DEV NOTE THIS PREVENTS INFINITE LOOPS WITH NEGATIVE VALUES
                 #
                 # current_width = grp.getRect().width()
@@ -191,12 +237,12 @@ def set_to_height(grp, desired_height, nb_of_repeats=26):
             desired_width = current_width * factor_from_current_height_to_desired_height
 
             grp.set_to_size(desired_width)
-        grp.size = grp.height()
+        grp.size = grp.height() if grp.content else desired_height
 
             # print('aspect_ratio CURRENT CHECK ', aspect_ratio, grp.getRect(), desired_width, desired_height)
     else:
         set_to_size(grp, desired_height, nb_of_repeats=nb_of_repeats)
-        grp.size = grp.height()
+        grp.size = grp.height() if grp.content else desired_height
 
 
     # Calculate the new height based on the desired width and the aspect ratio
@@ -586,7 +632,69 @@ class Group(Rectangle2D):
     #
     #         print('inner update', self.update_bounds())
 
+    def _affine(self, axis):
+        """(a, b) such that, laid out by set_to_size, this group's extent
+        along *axis* = a * (its extent across *axis*) + b. Labels and gaps
+        are the b part: they do not scale with the panels."""
+        if axis == self.orientation:
+            a_sum = 0.
+            b_sum = self.space * (len(self.content) - 1)
+            for elm in self.content:
+                a, b = _affine(elm, axis)
+                a_sum += a
+                b_sum += b
+            return a_sum, b_sum
+        a, b = self._affine(self.orientation)
+        if a > 0:
+            return 1. / a, -b / a
+        # labels only: as tall (wide) as the largest of them
+        return 0., max((_affine(elm, axis)[1] for elm in self.content), default=0.)
+
+    def _layout_cross(self, cross):
+        """Lay the content out with *cross* as the row height (column width)."""
+        cross = max(cross, _MIN_CROSS)
+        for elm in self.content:
+            if isinstance(elm, Group):
+                if elm.isText:
+                    # a label row inside a group: as resize_rects_within_* did
+                    if self.orientation == 'X':
+                        elm.setHeight(cross)
+                    else:
+                        elm.setWidth(cross)
+                    elm.set_to_scale(1.)
+                elif elm.orientation == self.orientation:
+                    elm._layout_cross(cross)
+                else:
+                    elm.set_to_size(cross)
+            elif getattr(elm, 'isText', False):
+                width, height = _label_extent(elm, 'X'), _label_extent(elm, 'Y')
+                if self.orientation == 'X':
+                    elm.setWidth(width)
+                    elm.setHeight(cross)
+                else:
+                    elm.setHeight(height)
+                    elm.setWidth(cross)
+                elm.set_to_scale(1.)
+            elif self.orientation == 'X':
+                resize_rect_preserve_aspect_ratio(elm, None, cross)
+            else:
+                resize_rect_preserve_aspect_ratio(elm, cross, None)
+        self.pack()
+        self.align()
+        self.update_bounds()
+
     def set_to_size(self, desired_size):
+        # solved exactly: the old fixed-point iteration (26 passes, groups
+        # taken as scaling like images) did not converge with labels stacked
+        # in a column — undo/redo and reopening gave other sizes, or
+        # negative scales (panels not drawn)
+        try:
+            a, b = self._affine(self.orientation)
+        except ZeroDivisionError:
+            a = 0
+        if a > 0:
+            self._layout_cross((desired_size - b) / a)
+            return
         sum_along_axis = self.get_incompressible_size(axis=self.orientation)
         if self.orientation == 'X':
             resize_rects_within_total_width(self.content, desired_size, sum_along_axis)
@@ -664,6 +772,12 @@ class Group(Rectangle2D):
             return super().height()
 
     def update_bounds(self):
+        if not self.content:
+            # an emptied group (its panels dragged out) got infinite bounds,
+            # its row size -inf and NaN coordinates: painting raised and Qt
+            # crashed natively (monkey seed 143)
+            self.setRect(self.x(), self.y(), 0, 0)
+            return
         # Initialize bounding_rect with maximum and minimum values
         bounding_rect = [float('inf'), float('inf'), float('-inf'), float('-inf')]
 

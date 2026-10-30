@@ -377,13 +377,12 @@ class TAText2D(Rectangle2D):
         if args or kwargs:
             rect = QRectF(self.x()*self.scale, self.y()*self.scale, text_width, text_height)
             if self.text_orientation is not None and not 'X' in self.text_orientation and 'all' in kwargs:
-                t = QTransform().translate(rect.x(), rect.y()).translate(rect.height(),0).rotate(90).translate(-rect.x(), -rect.y())
-                rotatedPolygon = t.mapToPolygon(rect.toRect())  # Map the rectangle to a rotated polygon
-
-                # Create a QRectF from the bounding rectangle of the rotated polygon
-                rotatedRect = rotatedPolygon.boundingRect()
-                rotatedRect = QRectF(rotatedRect.x(), rotatedRect.y(), rotatedRect.width(), rotatedRect.height())
-                rect = rotatedRect
+                # turned 90° about its top-left then moved right by its height:
+                # the same corner, width and height swapped. (Mapping rect.toRect()
+                # rounded to whole pixels at its current position, so one label
+                # measured 15 or 16 px depending on where it was: undo/redo and
+                # reopening changed the row — monkey seed 149.)
+                rect = QRectF(rect.x(), rect.y(), text_height, text_width)
             return rect
         else:
             # if args or kwargs:
