@@ -97,6 +97,10 @@ def resize_incompressible_rects(rects: list, target_width:float, target_height: 
     for rect in rects:
         # resized_rect = resize_rect_preserve_aspect_ratio(rect, target_width, target_height)
         # resized_rects.append(resized_rect)
+        if not getattr(rect, 'annotations', None):
+            # a label whose text was removed: an IndexError here broke the
+            # layout of its whole row (and the drag preview)
+            continue
         txt_width = rect.annotations[0].width(all=True)
         txt_height = rect.annotations[0].height(all=True)
         max_w = max(txt_width, max_w)

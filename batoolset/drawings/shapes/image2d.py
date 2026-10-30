@@ -913,7 +913,15 @@ class Image2D(Rectangle2D):
             print('failed --> ROLLING BACK')
             # print('fixed target_dims', target_dims, image_to_display.shape)
 
-            self.qimage = toQimage(image_to_display, normalize=False, dimensions=target_dims, luts=luts)
+            try:
+                self.qimage = toQimage(image_to_display, normalize=False, dimensions=target_dims, luts=luts)
+            except Exception:
+                traceback.print_exc()
+                self.qimage = None
+            if self.qimage is None:
+                # said in the words the exporters look for ('could not load
+                # image'): the panel was exported empty and the export said OK
+                logger.error('could not load image ' + str(self.filename))
             # self.qimage = toQimage(image_to_display, dimensions=target_dims, luts=None)
 
         if self.qimage is not None and (getattr(self, 'flip_h', False) or getattr(self, 'flip_v', False)):
