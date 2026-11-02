@@ -650,9 +650,29 @@ class Group(Rectangle2D):
         # labels only: as tall (wide) as the largest of them
         return 0., max((_affine(elm, axis)[1] for elm in self.content), default=0.)
 
+    def _minimum_cross(self):
+        """Smallest row height (column width) keeping every panel of every
+        nested group at or above _MIN_CROSS.
+
+        Clamped deeper down instead, a nested row was bigger than its parent
+        solved for, and laying the figure out again at its own width gave
+        other sizes (redo and reopen drifted: monkey seed 201, found by
+        ChatGPT)."""
+        minimum = _MIN_CROSS
+        for elm in self.content:
+            if not isinstance(elm, Group) or elm.isText:
+                continue
+            needed = elm._minimum_cross()
+            if elm.orientation != self.orientation:
+                # our cross extent is its extent along its own axis
+                a, b = elm._affine(elm.orientation)
+                needed = a * needed + b
+            minimum = max(minimum, needed)
+        return minimum
+
     def _layout_cross(self, cross):
         """Lay the content out with *cross* as the row height (column width)."""
-        cross = max(cross, _MIN_CROSS)
+        cross = max(cross, self._minimum_cross())
         for elm in self.content:
             if isinstance(elm, Group):
                 if elm.isText:
