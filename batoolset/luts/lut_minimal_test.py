@@ -13,6 +13,10 @@ from batoolset.img import fig_to_numpy
 import base64
 import numexpr as ne
 
+# an inverted LUT is its name + INVERTED_SUFFIX_NAME, its formula + INVERTED_SUFFIX
+INVERTED_SUFFIX_NAME = '_INVERTED'
+INVERTED_SUFFIX = '|inverted'
+
 def serialize_lut(lut_256_3):
     # see also /home/aigouy/mon_prog/Python/epyseg_pkg/personal/FigGen_EzFig2/trash/tst_base64_encode_the_whole_np_array.py
     # this generates a string that can be serialized
@@ -191,6 +195,13 @@ def list_available_luts(return_matplotlib_lib_luts_in_separate_database=False):
         "RED_BLACK_BLUE": "-36,0,36"
     }
 
+    # every LUT also inverted, as Fiji's Invert LUT (GRAY_INVERTED: dark signal on
+    # white); matplotlib maps have their own _r. DEFAULT (the acquisition colour)
+    # and PACKING are not colour ramps.
+    for name, formula in list(hash_pal.items()):
+        if name not in ('DEFAULT', 'PACKING'):
+            hash_pal[name + INVERTED_SUFFIX_NAME] = formula + INVERTED_SUFFIX
+
     matplot_lib_luts = []
     try:
         # Get the available colormaps from matplotlib
@@ -210,6 +221,44 @@ def list_available_luts(return_matplotlib_lib_luts_in_separate_database=False):
 
     # Return the dictionary of colormaps
     return hash_pal
+
+
+def invert_lut_name(name, available=None):
+    """
+    The inverted twin of a LUT name, and back again: GRAY <-> GRAY_INVERTED,
+    MATPLOTLIB_viridis <-> MATPLOTLIB_viridis_r. The inversion is stored in the
+    name, so a saved figure keeps it.
+
+    Args:
+        name (str): an exact LUT key.
+        available (dict, optional): list_available_luts(), when already known.
+
+    Returns:
+        str or None: the twin's key; None when the LUT has none (DEFAULT, PACKING,
+        an unknown name).
+
+    Examples:
+        >>> invert_lut_name('GRAY')
+        'GRAY_INVERTED'
+        >>> invert_lut_name('MATPLOTLIB_viridis_r')
+        'MATPLOTLIB_viridis'
+    """
+    if not isinstance(name, str):
+        return None
+    available = list_available_luts() if available is None else available
+    if name.startswith('MATPLOTLIB_'):
+        twin = name[:-2] if name.endswith('_r') else name + '_r'
+    elif name.endswith(INVERTED_SUFFIX_NAME):
+        twin = name[:-len(INVERTED_SUFFIX_NAME)]
+    else:
+        twin = name + INVERTED_SUFFIX_NAME
+    return twin if twin in available else None
+
+
+def is_inverted_lut(name):
+    """True for an inverted LUT key (GRAY_INVERTED, MATPLOTLIB_viridis_r)."""
+    return isinstance(name, str) and (name.endswith(INVERTED_SUFFIX_NAME) or
+                                      (name.startswith('MATPLOTLIB_') and name.endswith('_r')))
 
 
 class PaletteCreator:
@@ -916,6 +965,9 @@ class PaletteCreator:
              [64 64 64]]
 
         """
+
+        if isinstance(palette_formula, str) and palette_formula.endswith(INVERTED_SUFFIX):
+            return self.reverse_ramp(self.create3(palette_formula[:-len(INVERTED_SUFFIX)]))
 
         if palette_formula in self.matplot_lib_luts:
             return cmap_to_numpy(palette_formula)
