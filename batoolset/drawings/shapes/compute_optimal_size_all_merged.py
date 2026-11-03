@@ -141,6 +141,13 @@ def resize_incompressible_rects(rects: list, target_width:float, target_height: 
 #
 #     return resized_rects
 
+def _empty_group(rect):
+    """A group with nothing in it yet (a row added to be filled later): it has no
+    size, so its aspect ratio divided by zero and the whole row was not laid out
+    (PyFigures chat '3 rows per 2 cols', 2026-11-03). Sized when filled."""
+    return isinstance(getattr(rect, 'content', None), list) and not rect.content
+
+
 def resize_rects_within_total_width(rects: list, max_total_width: float, sum_incompressible_space_along_x: float):
     # incompressible_width = (len(rects) - 1) * space_in_px
     available_width = max_total_width - sum_incompressible_space_along_x
@@ -148,7 +155,7 @@ def resize_rects_within_total_width(rects: list, max_total_width: float, sum_inc
 
     total_incompressible_text_width = sum(rect.width(all=True) for rect in rects if rect.isText)
 
-    compressible = [rect for rect in rects if not rect.isText]
+    compressible = [rect for rect in rects if not rect.isText and not _empty_group(rect)]
     incompressible = [rect for rect in rects if rect.isText]
 
     available_width-=total_incompressible_text_width
@@ -230,7 +237,7 @@ def resize_rects_within_total_height(rects: list, max_total_height: float, sum_i
     # total_aspect_ratio = sum(rect.height() / rect.width() for rect in rects if not rect.immutable)  # immutable objects should be removed from the stuff -−> TODO
     # total_aspect_ratio = sum(rect.getAR(invert=True) for rect in rects if not rect.immutable)  # immutable objects should be removed from the stuff -−> TODO
 
-    compressible = [rect for rect in rects if not rect.isText]
+    compressible = [rect for rect in rects if not rect.isText and not _empty_group(rect)]
     incompressible = [rect for rect in rects if rect.isText]
 
     available_height -= total_incompressible_text_height
