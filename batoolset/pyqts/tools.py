@@ -112,19 +112,18 @@ def updateLutLabelPreview(lut, previewLabel, length, orientation='horizontal', h
     setPixmapToLabel(pixmap,previewLabel)
 
 
+# Qt already maps "Ctrl" / ControlModifier to the Command key on macOS ("Meta"
+# is the physical Control key there, which macOS uses for right-click): the
+# old "Meta" on macOS made every Ctrl shortcut Control+key and Cmd-click did
+# not add to a selection.
 def getCtrlModifierAsString():
-    import sys
-    if sys.platform == "darwin":
-        return "Meta"  # Command key on macOS
-    # else:
-    return "Ctrl"  # Control key on other platforms
+    """'Ctrl' in a QKeySequence: Ctrl on Windows/Linux, Command on macOS."""
+    return "Ctrl"
 
 
 def getCtrlModifier():
-    if sys.platform == "darwin":
-        return Qt.MetaModifier
-    else:
-        return Qt.ControlModifier
+    """ControlModifier: Ctrl on Windows/Linux, Command on macOS."""
+    return Qt.ControlModifier
 
 class WheelBlocker(QObject):
     def eventFilter(self, obj, event):
