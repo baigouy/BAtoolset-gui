@@ -181,6 +181,18 @@ def _pdf_page_as_raster_svg(path, page=0):
     return svg.encode('utf-8')
 
 
+_EMPTY_SVG_PATH = re.compile(rb'<path((?:(?!\sd=)[^>])*?)\s*/>')
+
+
+def fill_empty_svg_paths(data: bytes) -> bytes:
+    """Give every <path/> without a 'd' an empty move-to. Matplotlib writes the
+    space glyph as such a path; Qt >= 6.5 then warns 'Invalid path data; path
+    truncated.' and 'link #DejaVuSans-3 is undefined!' for every use of it."""
+    if b'<path' not in data:
+        return data
+    return _EMPTY_SVG_PATH.sub(lambda m: b'<path' + m.group(1) + b' d="M 0 0"/>', data)
+
+
 def _make_svg_renderer(source):
     """QSvgRenderer that keeps the SVG's aspect ratio when drawn into a panel
     rectangle. Without this, a figure whose (tight-cropped) SVG aspect differs
@@ -199,6 +211,10 @@ def _make_svg_renderer(source):
         elif isinstance(source, QByteArray):
             data = bytes(source)
         if isinstance(data, (bytes, bytearray)):
+            fixed = fill_empty_svg_paths(bytes(data))
+            if fixed != data:
+                data = fixed
+                source = QByteArray(fixed)
             from batoolset.drawings.svg_clip_renderer import ClippingSvgRenderer
             if ClippingSvgRenderer.needed(bytes(data)):
                 r = ClippingSvgRenderer(bytes(data))
