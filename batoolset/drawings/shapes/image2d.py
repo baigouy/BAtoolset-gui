@@ -2379,6 +2379,19 @@ class Image2D(Rectangle2D):
                 traceback.print_exc()
         return changed
 
+    def _cropped_to_nothing(self):
+        """True when the crop margins remove the whole image (left + right >=
+        its width, or top + bottom >= its height): nothing is left to draw."""
+        try:
+            w, h = self.get_raw_size()
+        except Exception:
+            return False
+        if not w or not h:
+            return False
+        crop = [max(0, float(getattr(self, k, 0) or 0))
+                for k in ('crop_left', 'crop_right', 'crop_top', 'crop_bottom')]
+        return w - crop[0] - crop[1] <= 0 or h - crop[2] - crop[3] <= 0
+
     def _update_inset_scale(self, parent):
         """For an inset: set its scale so it is drawn
         fraction_of_parent_image_width_if_image_is_inset x the parent's displayed
@@ -2386,7 +2399,8 @@ class Image2D(Rectangle2D):
         a QRectF at the origin. Must run before the inset is positioned."""
         rect = QRectF(0, 0, parent.width(all=True) * self.fraction_of_parent_image_width_if_image_is_inset, 0)
         cropped = self.getRect()
-        if cropped.height() > 0 and rect.width() > 0:
+        # cropped to nothing (crop margins >= the image size): no size to keep
+        if cropped.height() > 0 and cropped.width() > 0 and rect.width() > 0:
             rect.setHeight(rect.width() / (cropped.width() / cropped.height()))
             self.set_to_scale(self.width() / rect.width())
         return rect
@@ -2405,12 +2419,20 @@ class Image2D(Rectangle2D):
                         extra.unit_to_pixel_conversion_factor = self.px_to_unit_conversion_factor
                         extra.update_bar_at_scale(self.scale)
                     if isinstance(extra, Image2D):
-                        extra._sync_display_from_parent(self)
-                        # size the inset BEFORE placing it: its scale used to be
-                        # set only while drawing, so placement used the stale
-                        # stored scale — a single-pass render (export) put a
-                        # cropped inset at the wrong corner offset and clipped it
-                        extra._update_inset_scale(self)
+                        # an inset that fails here (one cropped to 0 px raised
+                        # ZeroDivisionError) must not stop the panel's other
+                        # annotations from being drawn: its ROI vanished from the
+                        # canvas while the panel editor still showed it (2026-11-06)
+                        try:
+                            extra._sync_display_from_parent(self)
+                            # size the inset BEFORE placing it: its scale used to be
+                            # set only while drawing, so placement used the stale
+                            # stored scale — a single-pass render (export) put a
+                            # cropped inset at the wrong corner offset and clipped it
+                            extra._update_inset_scale(self)
+                        except Exception:
+                            traceback.print_exc()
+                            continue
                     try:
                         try:
                             pos = extra.placement.get_position()
@@ -2450,6 +2472,8 @@ class Image2D(Rectangle2D):
                               *objects)  # TODO --> find packing mode from position --> should be doable --> and can ignore
 
                 for extra in self.annotations:
+                    if isinstance(extra, Image2D) and extra._cropped_to_nothing():
+                        continue      # an inset cropped to 0 px: no image, no border bar
                     rect_to_plot = self.getRect(all=True)
                     center = rect_to_plot.center()
 
