@@ -244,6 +244,10 @@ class Image2D(Rectangle2D):
     # When True, skip pixel loading in __init__ (used for non-blocking DND deserialization).
     # Call load_img() later on each object to load pixel data.
     _lazy_mode = False
+    # id()s of panels whose pixels a host is loading in the background (lazy
+    # open): drawn as "Loading…" instead of "Error". Kept here, not on the
+    # panel, so it is never saved with it (to_dict copies __dict__).
+    pixels_pending = set()
     # When True, a scripted panel that already has a stored width/height keeps
     # that rectangle and its custom_loading_script is NOT executed. Used by the
     # headless layout recompute so re-laying out a figure never runs (possibly
@@ -2248,6 +2252,11 @@ class Image2D(Rectangle2D):
                             if self.filename == '@template@':
                                 text = "Template"
                                 pen = QPen(QColor(255, 165, 0))  # orange
+                            elif id(self) in Image2D.pixels_pending:
+                                # the host is loading its pixels in the background:
+                                # not an error (yet)
+                                text = "Loading…"
+                                pen = QPen(QColor(150, 150, 150))  # grey
                             else:
                                 text = "Error"
                                 pen = QPen(QColor(255, 0, 0))  # red
