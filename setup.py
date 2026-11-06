@@ -5,7 +5,7 @@ with open('README.md', encoding='utf-8') as f:
 
 setuptools.setup(
     name='batoolset-gui',
-    version='0.2.3',
+    version='0.2.4',
     author='Benoit Aigouy',
     author_email='benoit.aigouy@gmail.com',
     description='Qt/GUI layer for batoolset (drawings, figure, luts, widgets)',
