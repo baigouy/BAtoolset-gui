@@ -238,6 +238,41 @@ def _make_svg_renderer(source):
 # gap (figure units = px at 100 %) between a panel's edge and the letters,
 # labels and scale bars pinned to it
 EDGE_MARGIN = 2
+TEXT_STACK_GAP = 0.25     # between two stacked corner texts: a quarter of the lower one's line
+
+
+def stack_texts_by_ink(objects):
+    """Corner texts stacked by what they show, not by their line boxes.
+
+    pack2 puts each text right under the previous one's line box: the room kept
+    for descenders, the lift of a panel letter and the empty band above the next
+    text's capitals added up to about 65 % of a 9 pt letter between a letter and
+    the label under it (user, 2026-11-17: "way too big"). Each text after the
+    first now sits TEXT_STACK_GAP of its line below the ink (or box) of the one
+    before it (above it for bottom corners). Objects that are not texts, and
+    rotated or vertical texts, keep pack2's place; so does what follows them."""
+    if len(objects) < 2:
+        return
+    from batoolset.drawings.shapes.txt2d import TAText2D
+    try:
+        mode = objects[0].placement.get_packing_orientation()
+    except Exception:
+        return
+    if mode not in ('Y', '-Y'):
+        return
+    previous = objects[0]
+    for current in objects[1:]:
+        if not (isinstance(previous, TAText2D) and isinstance(current, TAText2D)):
+            return
+        above, below = previous.ink_extent(), current.ink_extent()
+        if above is None or below is None:
+            return
+        gap = TEXT_STACK_GAP * current.height()
+        if mode == 'Y':          # top corners: downwards
+            current.setTopLeft(current.x(), previous.y() + above[1] + gap - below[0])
+        else:                    # bottom corners: upwards
+            current.setTopLeft(current.x(), previous.y() + above[0] - gap - below[1])
+        previous = current
 
 
 class Image2D(Rectangle2D):
@@ -1388,7 +1423,30 @@ class Image2D(Rectangle2D):
                 print('ENTERING LAST C LOOP ALTERNATIVE', min, max)
             # I still need to apply the lut if it exists
             # no channels -−> we can still apply the LUT
-            if self.LUTs:
+            # one channel of a multi-channel file shown alone: without a user LUT it
+            # keeps the file's own colour (its metadata LUT, already picked for the
+            # shown channel in *luts*), as in the merge; it was drawn gray (2026-11-17)
+            file_lut = None
+            try:
+                if self.channels and luts and len(luts) == 1 and isinstance(luts[0], np.ndarray) \
+                        and 'c' in (guess_dimensions(self.img) or '') \
+                        and len(bool_list_to_index_list(self.channels)) == 1:
+                    file_lut = luts[0]
+            except Exception:
+                file_lut = None
+            user_lut_missing = True
+            try:
+                shown = bool_list_to_index_list(self.channels) if self.channels else []
+                if self.LUTs and shown and shown[0] < len(self.LUTs) and self.LUTs[shown[0]] not in (None, 'NONE', 'DEFAULT'):
+                    user_lut_missing = False
+                elif self.LUTs and not shown and any(l not in (None, 'NONE', 'DEFAULT') for l in self.LUTs):
+                    user_lut_missing = False
+            except Exception:
+                user_lut_missing = not self.LUTs
+            if file_lut is not None and user_lut_missing:
+                image_to_display = apply_lut(image_to_display, file_lut,
+                                             convert_to_RGB=True, do_not_interpolate=True)
+            elif self.LUTs:
                 if __DEBUG_NORMALIZATION__:
                     print('ENTERING LAST C LOOP ALTERNATIVE part1', min, max, len(self.LUTs))
                 # code duplication --> shall I really do that ??? --> maybe have a force gray that makes it gray instead -− >better
@@ -1850,7 +1908,9 @@ class Image2D(Rectangle2D):
         """Restore the original renderer after export."""
         if getattr(self, '_export_original_renderer', None) is not None:
             self.renderer = self._export_original_renderer
-            self._export_original_renderer = None
+        # removed, not set to None: a leftover attribute was saved with the figure, so
+        # every export (or panel preview) changed the document (2026-11-17)
+        self.__dict__.pop('_export_original_renderer', None)
 
     def get_extra_border_size(self):
         if self.border_size is not None and self.border_color is not None:
@@ -2470,6 +2530,10 @@ class Image2D(Rectangle2D):
                     else:
                         pack2(extra_space, objects[0].placement, True,
                               *objects)  # TODO --> find packing mode from position --> should be doable --> and can ignore
+                        try:
+                            stack_texts_by_ink(objects)
+                        except Exception:
+                            traceback.print_exc()
 
                 for extra in self.annotations:
                     if isinstance(extra, Image2D) and extra._cropped_to_nothing():
@@ -2758,7 +2822,14 @@ painter.setRenderHints(Qt.SmoothPixmapTransform | Qt.HighQualityAntialiasing)
         painter.save()
         try:
             rect = self.getRect(all=True) # there is a big bug with that
-            painter.setPen(QPen(QColor(0, 255, 255)))
+            # cyan dashes alternating with black, as every selection outline: a plain
+            # line vanished on images of its own colour (2026-11-17)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(0, 0, 0)))
+            painter.drawRect(rect)
+            dashed = QPen(QColor(0, 255, 255))
+            dashed.setDashPattern([4.0, 4.0])
+            painter.setPen(dashed)
             painter.drawRect(rect)
         except Exception:
             print('inner error')

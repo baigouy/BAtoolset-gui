@@ -32,6 +32,32 @@ def draw_document(doc, painter):
     doc.documentLayout().draw(painter, ctx)
 
 
+def _ink_rows(doc, oversample=4):
+    """(top, bottom) of the drawn ink of *doc*, in its own coordinates: drawn
+    alone at *oversample* x into a transparent image, the rows with any ink.
+    None when nothing is drawn."""
+    import numpy as np
+    size = doc.documentLayout().documentSize()
+    w, h = int(size.width() * oversample) + 4, int(size.height() * oversample) + 4
+    if w <= 4 or h <= 4:
+        return None
+    image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    painter.scale(oversample, oversample)
+    draw_document(doc, painter)
+    painter.end()
+    ptr = image.constBits()
+    ptr.setsize(image.sizeInBytes())
+    alpha = np.frombuffer(ptr, np.uint8).reshape(h, image.bytesPerLine() // 4, 4)[:, :w, 3]
+    rows = np.nonzero((alpha > 40).any(axis=1))[0]
+    if not len(rows):
+        return None
+    return rows[0] / oversample, (rows[-1] + 1) / oversample
+
+
 class TAText2D(Rectangle2D):
 
     # TODO add bg to it so that it can be drawn
@@ -106,22 +132,88 @@ class TAText2D(Rectangle2D):
         text = doc.toPlainText().strip()
         if not text:
             return 0.
-        from qtpy.QtGui import QFontMetricsF, QTextCursor
-        cursor = QTextCursor(doc)
-        cursor.setPosition(1)
-        font = cursor.charFormat().font()
-        key = (text, font.toString())
+        key = ('shift', doc.toHtml())
         cache = TAText2D._ink_shift_cache
         if key not in cache:
-            fm = QFontMetricsF(font)
-            # ink top below the line top (the baseline is fm.ascent() down)
-            shift = fm.tightBoundingRect(text).top() + fm.ascent()
-            # in line-box units: the document is laid out at its own resolution
-            cache[key] = max(0., shift) / fm.height() if fm.height() else 0.
-        line = doc.documentLayout().blockBoundingRect(doc.firstBlock()).height()
-        return cache[key] * line
+            # measured on the document as drawn: font metrics did not match its
+            # layout ("l" and "b" sat lower than "a", 2026-11-17)
+            band = _ink_rows(doc)
+            cache[key] = max(0., band[0]) if band else 0.
+        return cache[key]
 
     _ink_shift_cache = {}
+
+    BOX_PAD = 0.1     # padding of a letter's box, as a fraction of its line height
+    # 'uniform': cap height to baseline for every letter; 'hug': the letter's own ink
+    # (its top where it is without a box); 'line': the old full line box
+    LETTER_BOX = 'hug'      # the letter stays where it is without a box (user, 2026-11-17)
+
+    def _boxed_letter_band(self):
+        """(top, bottom) of the box drawn behind a top letter, in its document
+        coordinates: from the font's cap height (or the letter's own top, if
+        higher) to the baseline (or its descender, for g, j, p, q, y), padded.
+        The same band for every plain letter, so the boxes of a, b, c... match.
+        None when the old full-line box applies (other texts, bottom letters,
+        rotated text).
+
+        User, 2026-11-17: after a black background was added to the letters "all
+        the letters went slightly down": the box was the whole line box, flush in
+        the corner, and the letter was no longer lifted to the top (see
+        _letter_ink_shift), so a lowercase letter sat low under a band of empty
+        black."""
+        if not getattr(self, 'is_letter', False) or self.fill_color is None or self.LETTER_BOX == 'line':
+            return None
+        if self.placement is None or not self.placement.check_position('top'):
+            return None
+        if (self.text_orientation is not None and 'X' not in self.text_orientation) or self.theta:
+            return None
+        doc = self._layout_doc()
+        text = doc.toPlainText().strip()
+        if not text:
+            return None
+        key = ('band', self.LETTER_BOX, doc.toHtml())
+        cache = TAText2D._ink_shift_cache
+        if key not in cache:
+            # measured on the document as drawn: font metrics did not match its
+            # layout (the box came out taller than the line)
+            probe = doc.clone()
+            if self.LETTER_BOX == 'uniform':
+                from qtpy.QtGui import QTextCursor
+                cursor = QTextCursor(probe)
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                cursor.insertText('H')          # cap height and baseline, in the same format
+            band = _ink_rows(probe)
+            if band is None:
+                return None
+            top, bottom = band
+            # from the font size, not the letter: an "l" got more than an "a"
+            pad = self.BOX_PAD * probe.documentLayout().documentSize().height()
+            cache[key] = (top - pad, bottom + pad)
+        return cache[key]
+
+    def ink_extent(self):
+        """(top, bottom) of what this text shows (its ink, or its box when it has
+        one), below its rect top, as draw() places it; None when it cannot tell
+        (rotated or vertical text). Used to stack corner texts by what is seen."""
+        if (self.text_orientation is not None and 'X' not in self.text_orientation) or self.theta:
+            return None
+        band = self._boxed_letter_band()
+        if band is not None:
+            return 0., band[1] - band[0]
+        doc = self._layout_doc()
+        size = doc.documentLayout().documentSize()
+        if self.fill_color is not None:
+            # the old full-line box behind other texts: the box is what shows
+            return 0., size.height()
+        key = ('ink', doc.toHtml())
+        cache = TAText2D._ink_shift_cache
+        if key not in cache:
+            cache[key] = _ink_rows(doc)
+        rows = cache[key]
+        if rows is None:
+            return None
+        offset = (self.height() - size.height()) / 2 - self._letter_ink_shift()
+        return offset + rows[0], offset + rows[1]
 
     def set_range(self, range):
         # this is the range of labels in text rows
@@ -205,8 +297,9 @@ class TAText2D(Rectangle2D):
                 painter.setPen(QtCore.Qt.red)
                 painter.drawRect(rect_to_plot)
 
+            band = self._boxed_letter_band()
             # do not move this, this is where the fill color should be applied
-            if self.fill_color is not None:
+            if self.fill_color is not None and band is None:
                 # if isinstance(self.fill_color, QColor):
                 #     self.fill_color = self.fill_color.rgb() & 0xFFFFFF
 
@@ -326,7 +419,19 @@ class TAText2D(Rectangle2D):
             # print(f"Current rotation angle: {rotation_angle:.2f} degrees")
             # print(self.text_orientation, '-->',get_angle(self.text_orientation)) # NO BUG IS THERE YET RANDOM ....
             # painter.resetTransform()
-            painter.translate(0, -self._letter_ink_shift())
+            if band is not None:
+                # a box that hugs the letter, its top where the box's top was (the
+                # corner): the text moves up by the empty part of the line above it
+                top, bottom = band
+                painter.translate(0, -top)
+                painter.save()
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QBrush(QColor(self.fill_color)))
+                painter.drawRect(QRectF(0, top, self._layout_doc().documentLayout().documentSize().width(),
+                                        bottom - top))
+                painter.restore()
+            else:
+                painter.translate(0, -self._letter_ink_shift())
             draw_document(self._layout_doc(), painter)
 
 
