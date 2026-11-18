@@ -1870,9 +1870,11 @@ class Image2D(Rectangle2D):
                 saved_fs.append((text, fs, ff))
             except Exception:
                 pass
+        positions = None
         if shown is not None:
+            positions = [(ax, ax.get_position(original=True)) for ax in self.img.axes]
             self._fit_page_sizes(shown, [a for a, _ in saved_lw], [t for t, _, _ in saved_fs])
-        return {'lw': saved_lw, 'fs': saved_fs, 'size': size}
+        return {'lw': saved_lw, 'fs': saved_fs, 'size': size, 'positions': positions}
 
     def _refresh_page_text_renderer(self):
         """On screen too, a plot whose text is sized on the page is drawn with those sizes
@@ -1940,10 +1942,47 @@ class Image2D(Rectangle2D):
                         a.set_linewidth(line_pt)
                     except Exception:
                         pass
+                # the layout again for the new text sizes: in a small panel, 7 pt labels
+                # ran into each other (a two-way ANOVA note over the tick labels)
+                self._relayout_plot(fig)
         except Exception:
             traceback.print_exc()
 
+    @staticmethod
+    def _relayout_plot(fig):
+        """tight_layout with the room the plot asked for (staplot's
+        _staplot_layout_rect: a note under the axes); a figure laid out by hand
+        (_pyfigures_no_relayout) or with a constrained layout is left alone."""
+        if getattr(fig, '_pyfigures_no_relayout', False):
+            return
+        try:
+            engine = fig.get_layout_engine()
+            if engine is not None and type(engine).__name__ not in ('TightLayoutEngine', 'PlaceHolderLayoutEngine'):
+                return
+        except AttributeError:
+            pass
+        import warnings
+        try:
+            # room for the figure's own texts at its bottom edge (a note under the axes,
+            # e.g. staplot's two-way ANOVA): measured at their new size
+            renderer = fig.canvas.get_renderer()
+            bottom = 0.0
+            for t in fig.texts:
+                if t.get_visible() and t.get_text().strip() and t.get_position()[1] < 0.15:
+                    box = t.get_window_extent(renderer)
+                    bottom = max(bottom, box.y1 / max(fig.bbox.height, 1) + 0.01)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                fig.tight_layout(rect=(0, min(bottom, 0.5), 1, 1))
+        except Exception:
+            pass
+
     def _restore_publication_style(self, saved):
+        for ax, pos in saved.get('positions') or []:
+            try:
+                ax.set_position(pos)
+            except Exception:
+                pass
         if saved.get('size') is not None:
             try:
                 self.img.set_size_inches(*saved['size'])
