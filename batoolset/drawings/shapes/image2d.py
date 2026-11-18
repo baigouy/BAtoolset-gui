@@ -294,7 +294,7 @@ class Image2D(Rectangle2D):
     _export_editable_text = False
 
     # min = None, max = None,
-    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, flip_h=False, flip_v=False, **kwargs):
+    def __init__(self, *args, x=None, y=None, width=None, height=None, data=None, dimensions=None, channels=None, LUTs=None, projection=None, projection_z_start=None, projection_z_end=None, normalization=None,  filename=None, isText=False, fraction_of_parent_image_width_if_image_is_inset=0.25, opacity=1., theta=None, crop_left=0, crop_right=0, crop_top=0, crop_bottom=0,fill_color=None, border_color=0xFFFFFF,border_size=None, placement=Position('Top-Right'),annotations=None, custom_loading_script=None, allow_unknown_files=True, scale=1, user_comments='',__version__=1.0, px_to_unit_conversion_factor=0, extra_user_translation=(0,0),script_log=None, template_rect=None, serie_to_open=None, publication_style=True, publication_font_size=12, publication_line_width=0.65, publication_font='auto', publication_svg_stroke_width=0.65, follow_parent_display=False, flip_h=False, flip_v=False, publication_font_on_page=False, **kwargs):
 
         # print('args',args)
         # if kwargs:
@@ -381,6 +381,10 @@ class Image2D(Rectangle2D):
         self.publication_line_width = publication_line_width
         self.publication_font = _best_helvetica_clone() if publication_font == 'auto' else publication_font
         self.publication_svg_stroke_width = publication_svg_stroke_width
+        # True: publication_font_size / publication_line_width are sizes ON THE PAGE (the
+        # printed figure), whatever the panel's scale; False (older figures): sizes in the
+        # plot's own points, which shrink or grow with the panel
+        self.publication_font_on_page = publication_font_on_page
         self._raw_svg_bytes = None
 
         # crops
@@ -1790,9 +1794,30 @@ class Image2D(Rectangle2D):
             return None
         return getattr(self, 'publication_font', None)
 
+    def _plot_points_per_page_point(self):
+        """How many of the plot's own points make one point on the page: the plot (its
+        figure rect, in px at the figure's dpi) is drawn 1/scale as wide in the scene, and
+        a scene unit is a point of the exported page. 1 when it cannot be told."""
+        try:
+            if not getattr(self, 'publication_font_on_page', False) or not isinstance(self.img, plt.Figure):
+                return 1.0
+            scale = float(self.scale or 1)
+            dpi = float(self.img.get_dpi())
+            if scale <= 0 or dpi <= 0:
+                return 1.0
+            return 72.0 * scale / dpi
+        except Exception:
+            return 1.0
+
+    def _publication_sizes(self):
+        """(font size, line width) to draw the plot with: the publication sizes, turned
+        from page points into the plot's own when they are page sizes."""
+        k = self._plot_points_per_page_point()
+        return (getattr(self, 'publication_font_size', 12) * k,
+                getattr(self, 'publication_line_width', 0.65) * k)
+
     def _publication_rc_overrides(self):
-        font_size = getattr(self, 'publication_font_size', 12)
-        line_width = getattr(self, 'publication_line_width', 0.65)
+        font_size, line_width = self._publication_sizes()
         font_family = self._publication_family()
         overrides = {
             'font.size': font_size,
@@ -1815,8 +1840,7 @@ class Image2D(Rectangle2D):
 
     def _apply_publication_style(self):
         import matplotlib.text as mtext
-        font_size = getattr(self, 'publication_font_size', 12)
-        line_width = getattr(self, 'publication_line_width', 0.65)
+        font_size, line_width = self._publication_sizes()
         font_family = self._publication_family()
         saved_lw = []
         saved_fs = []
@@ -1837,7 +1861,40 @@ class Image2D(Rectangle2D):
                 saved_fs.append((text, fs, ff))
             except Exception:
                 pass
+        self._fit_page_sizes([a for a, _ in saved_lw], [t for t, _, _ in saved_fs])
         return {'lw': saved_lw, 'fs': saved_fs}
+
+    def _fit_page_sizes(self, line_artists, texts):
+        """Sizes on the page, exactly: new text sizes change the plot's outline (tight
+        bbox), and the plot is then fitted into the same panel, a bit smaller or larger
+        than planned (a plot with a legend beside it came out at 5 pt instead of 7). Measure
+        the restyled outline and set the sizes again, twice."""
+        if not getattr(self, 'publication_font_on_page', False) or not isinstance(self.img, plt.Figure):
+            return
+        try:
+            from batoolset.matplolibs.tools import get_fig_rect, figure_pad_inches
+            scale = float(self.scale or 1)
+            shown_pt = get_fig_rect(self.img).width() / scale if scale > 0 else 0     # its width in the scene
+            if shown_pt <= 0:
+                return
+            fig = self.img
+            for _ in range(2):
+                renderer = fig.canvas.get_renderer()
+                drawn_pt = fig.get_tightbbox(renderer).padded(figure_pad_inches(fig)).width * 72.0
+                if drawn_pt <= 0:
+                    return
+                k = drawn_pt / shown_pt           # plot points per page point
+                font_pt = getattr(self, 'publication_font_size', 12) * k
+                line_pt = getattr(self, 'publication_line_width', 0.65) * k
+                for t in texts:
+                    t.set_fontsize(font_pt)
+                for a in line_artists:
+                    try:
+                        a.set_linewidth(line_pt)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _restore_publication_style(self, saved):
         for artist, lw in saved['lw']:
