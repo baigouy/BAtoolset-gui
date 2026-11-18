@@ -1864,6 +1864,32 @@ class Image2D(Rectangle2D):
         self._fit_page_sizes([a for a, _ in saved_lw], [t for t, _, _ in saved_fs])
         return {'lw': saved_lw, 'fs': saved_fs}
 
+    def _refresh_page_text_renderer(self):
+        """On screen too, a plot whose text is sized on the page is drawn with those sizes
+        (it was drawn with the plot's own fonts: "change the font" changed the export
+        only, the canvas stayed as it was, 2026-11-18). Redrawn when its scale or its
+        publication settings change; not during an export, which has its own renderer."""
+        if not (getattr(self, 'publication_font_on_page', False) and getattr(self, 'publication_style', False)
+                and isinstance(getattr(self, 'img', None), plt.Figure)):
+            return
+        if getattr(self, '_export_original_renderer', None) is not None:
+            return
+        key = (round(float(self.scale or 1), 4), getattr(self, 'publication_font_size', None),
+               getattr(self, 'publication_line_width', None), getattr(self, 'publication_font', None))
+        renderer = getattr(self, 'renderer', None)
+        if renderer is not None and getattr(renderer, '_pyf_page_key', None) == key:
+            return
+        try:
+            buf = self._toBuffer(bufferType='svg', apply_publication=True)
+            if buf is None:
+                return
+            new = _make_svg_renderer(buf.read())
+            buf.close()
+            new._pyf_page_key = key                 # on the renderer: never saved with the figure
+            self.renderer = new
+        except Exception:
+            traceback.print_exc()
+
     def _fit_page_sizes(self, line_artists, texts):
         """Sizes on the page, exactly: new text sizes change the plot's outline (tight
         bbox), and the plot is then fitted into the same panel, a bit smaller or larger
@@ -2336,6 +2362,7 @@ class Image2D(Rectangle2D):
                             painter.drawImage(rotated_image_target, cropped_rotated_image, rotated_image_rect)
 
                 elif self.renderer is not None or isinstance(self.img, plt.Figure):
+                    self._refresh_page_text_renderer()
                     if self.crop_left or self.crop_right or self.crop_top or self.crop_bottom or self.theta:
                         vector_target = self.getRect(all=True)
                     else:
