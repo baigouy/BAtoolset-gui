@@ -1840,6 +1840,15 @@ class Image2D(Rectangle2D):
 
     def _apply_publication_style(self):
         import matplotlib.text as mtext
+        # the panel's shape and size as laid out (from the plot as it is now), before restyling
+        shown, size = None, None
+        if getattr(self, 'publication_font_on_page', False) and isinstance(self.img, plt.Figure):
+            try:
+                from batoolset.matplolibs.tools import get_fig_rect
+                shown = QRectF(get_fig_rect(self.img))
+                size = tuple(self.img.get_size_inches())
+            except Exception:
+                shown = None
         font_size, line_width = self._publication_sizes()
         font_family = self._publication_family()
         saved_lw = []
@@ -1861,8 +1870,9 @@ class Image2D(Rectangle2D):
                 saved_fs.append((text, fs, ff))
             except Exception:
                 pass
-        self._fit_page_sizes([a for a, _ in saved_lw], [t for t, _, _ in saved_fs])
-        return {'lw': saved_lw, 'fs': saved_fs}
+        if shown is not None:
+            self._fit_page_sizes(shown, [a for a, _ in saved_lw], [t for t, _, _ in saved_fs])
+        return {'lw': saved_lw, 'fs': saved_fs, 'size': size}
 
     def _refresh_page_text_renderer(self):
         """On screen too, a plot whose text is sized on the page is drawn with those sizes
@@ -1890,26 +1900,37 @@ class Image2D(Rectangle2D):
         except Exception:
             traceback.print_exc()
 
-    def _fit_page_sizes(self, line_artists, texts):
-        """Sizes on the page, exactly: new text sizes change the plot's outline (tight
-        bbox), and the plot is then fitted into the same panel, a bit smaller or larger
-        than planned (a plot with a legend beside it came out at 5 pt instead of 7). Measure
-        the restyled outline and set the sizes again, twice."""
-        if not getattr(self, 'publication_font_on_page', False) or not isinstance(self.img, plt.Figure):
-            return
+    def _fit_page_sizes(self, shown, line_artists, texts):
+        """Sizes on the page, exactly, and the panel filled: new text sizes change the
+        plot's outline (tight bbox), and the plot was then fitted into the same panel,
+        smaller than planned (a plot with a legend beside it: 5 pt instead of 7) and no
+        longer filling its width (user, 2026-11-18). Measure the restyled outline, set the
+        sizes again and give the figure the panel's shape (the axes stretch); a few
+        rounds. *shown*: the panel's rect (px at the figure's dpi) as laid out."""
         try:
-            from batoolset.matplolibs.tools import get_fig_rect, figure_pad_inches
+            from batoolset.matplolibs.tools import figure_pad_inches
             scale = float(self.scale or 1)
-            shown_pt = get_fig_rect(self.img).width() / scale if scale > 0 else 0     # its width in the scene
-            if shown_pt <= 0:
+            if scale <= 0 or shown.width() <= 0 or shown.height() <= 0:
                 return
+            dpi = float(self.img.get_dpi())
+            shown_w = shown.width() / scale           # the panel in the scene = page points
+            shown_h = shown.height() / scale
+            target_aspect = shown_w / shown_h
             fig = self.img
-            for _ in range(2):
+            for _ in range(4):
                 renderer = fig.canvas.get_renderer()
-                drawn_pt = fig.get_tightbbox(renderer).padded(figure_pad_inches(fig)).width * 72.0
-                if drawn_pt <= 0:
+                box = fig.get_tightbbox(renderer).padded(figure_pad_inches(fig))
+                drawn_w, drawn_h = box.width * 72.0, box.height * 72.0
+                if drawn_w <= 0 or drawn_h <= 0:
                     return
-                k = drawn_pt / shown_pt           # plot points per page point
+                # the plot's shape: wider or narrower to the panel's (its height kept)
+                w, h = fig.get_size_inches()
+                aspect = drawn_w / drawn_h
+                if abs(aspect / target_aspect - 1) > 0.002:
+                    fig.set_size_inches(max(0.5, w + (target_aspect * drawn_h - drawn_w) / 72.0), h)
+                    box = fig.get_tightbbox(fig.canvas.get_renderer()).padded(figure_pad_inches(fig))
+                    drawn_h = box.height * 72.0
+                k = drawn_h / shown_h                 # plot points per page point
                 font_pt = getattr(self, 'publication_font_size', 12) * k
                 line_pt = getattr(self, 'publication_line_width', 0.65) * k
                 for t in texts:
@@ -1920,9 +1941,14 @@ class Image2D(Rectangle2D):
                     except Exception:
                         pass
         except Exception:
-            pass
+            traceback.print_exc()
 
     def _restore_publication_style(self, saved):
+        if saved.get('size') is not None:
+            try:
+                self.img.set_size_inches(*saved['size'])
+            except Exception:
+                pass
         for artist, lw in saved['lw']:
             try:
                 artist.set_linewidth(lw)
