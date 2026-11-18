@@ -93,10 +93,17 @@ class ClippingSvgRenderer(QSvgRenderer):
     def __init__(self, svg_bytes):
         root = ET.fromstring(svg_bytes)
         n = 0
+        seen = set()
         for el in root.iter():                    # every element needs an id to be drawn alone
             if el.get("id") is None and isinstance(el.tag, str):
                 el.set("id", f"__pyf_el_{n}")
                 n += 1
+            elif el.get("id") in seen and isinstance(el.tag, str):
+                # an id used twice (an SVG with gids shared by many elements): each element
+                # drawn by id needs its own, or only one of them was drawn
+                el.set("id", f"{el.get('id')}__pyf_dup_{n}")
+                n += 1
+            seen.add(el.get("id"))
         ET.register_namespace("", _SVG_NS)
         ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
         data = ET.tostring(root)
