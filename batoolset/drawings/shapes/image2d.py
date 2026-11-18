@@ -1971,9 +1971,21 @@ class Image2D(Rectangle2D):
                 if t.get_visible() and t.get_text().strip() and t.get_position()[1] < 0.15:
                     box = t.get_window_extent(renderer)
                     bottom = max(bottom, box.y1 / max(fig.bbox.height, 1) + 0.01)
+            # a legend of the whole figure (seaborn's facet grids put theirs at the right
+            # edge): tight_layout ignores it, and the last facet ran under it
+            right, top = 1.0, 1.0
+            W, H = max(fig.bbox.width, 1), max(fig.bbox.height, 1)
+            for leg in getattr(fig, 'legends', []):
+                if not leg.get_visible():
+                    continue
+                box = leg.get_window_extent(renderer)
+                if box.x0 > 0.55 * W:
+                    right = min(right, box.x0 / W - 0.005)
+                elif box.y0 > 0.55 * H:
+                    top = min(top, box.y0 / H - 0.005)
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
-                fig.tight_layout(rect=(0, min(bottom, 0.5), 1, 1))
+                fig.tight_layout(rect=(0, min(bottom, 0.5), max(right, 0.5), max(top, 0.5)))
         except Exception:
             pass
 
