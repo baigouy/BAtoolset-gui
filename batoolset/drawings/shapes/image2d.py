@@ -241,6 +241,26 @@ EDGE_MARGIN = 2
 TEXT_STACK_GAP = 0.25     # between two stacked corner texts: a quarter of the lower one's line
 
 
+def _stack_ink(obj):
+    """(top, bottom) of what *obj* shows below its rect top: a text's ink, or a scale
+    bar's label ink down to its bar (as ScaleBar.draw places them); None otherwise."""
+    from batoolset.drawings.shapes.txt2d import TAText2D
+    from batoolset.drawings.shapes.scalebar import ScaleBar
+    if isinstance(obj, TAText2D):
+        return obj.ink_extent()
+    if isinstance(obj, ScaleBar):
+        space = getattr(obj, 'extra_space', 3)
+        bottom = obj.height() - space
+        top = bottom - obj.bar.height()
+        legend = getattr(obj, 'legend', None)
+        if isinstance(legend, TAText2D):
+            ink = legend.ink_extent()      # None for an empty label: the bar is the top
+            if ink is not None:
+                top = min(top, space / 2. + ink[0])
+        return top, bottom
+    return None
+
+
 def stack_texts_by_ink(objects):
     """Corner texts stacked by what they show, not by their line boxes.
 
@@ -250,7 +270,9 @@ def stack_texts_by_ink(objects):
     the label under it (user, 2026-11-17: "way too big"). Each text after the
     first now sits TEXT_STACK_GAP of its line below the ink (or box) of the one
     before it (above it for bottom corners). Objects that are not texts, and
-    rotated or vertical texts, keep pack2's place; so does what follows them."""
+    rotated or vertical texts, keep pack2's place; so does what follows them.
+    Scale bars are stacked by their ink too (2026-11-19: a bar put top left sat a
+    whole letter height under the panel letter)."""
     if len(objects) < 2:
         return
     from batoolset.drawings.shapes.txt2d import TAText2D
@@ -262,12 +284,12 @@ def stack_texts_by_ink(objects):
         return
     previous = objects[0]
     for current in objects[1:]:
-        if not (isinstance(previous, TAText2D) and isinstance(current, TAText2D)):
-            return
-        above, below = previous.ink_extent(), current.ink_extent()
+        above, below = _stack_ink(previous), _stack_ink(current)
         if above is None or below is None:
             return
-        gap = TEXT_STACK_GAP * current.height()
+        # a quarter of the lower text's line; for a scale bar, of its label's line
+        line = current.height() if isinstance(current, TAText2D) else             (current.legend.height() if isinstance(getattr(current, 'legend', None), TAText2D) else 12.)
+        gap = TEXT_STACK_GAP * line
         if mode == 'Y':          # top corners: downwards
             current.setTopLeft(current.x(), previous.y() + above[1] + gap - below[0])
         else:                    # bottom corners: upwards
