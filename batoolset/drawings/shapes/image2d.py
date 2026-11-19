@@ -115,6 +115,24 @@ def _normalize_to_uint8(arr, mn, mx):
 
 from batoolset.matplolibs.tools import best_helvetica_clone as _best_helvetica_clone
 
+# publication_font = FOLLOW_LABELS: a plot's text in the font of the figure's labels (the
+# texts other than the panel letters), read when it is drawn (user, 2026-11-19: "use the
+# same font for the graph as the image fonts"; "and the size of the label font").
+FOLLOW_LABELS = 'figure'
+# The figure's label style, set by the window that draws the figure: a callable giving
+# {'family': str | None, 'size': float | None} (the size in points on the page).
+label_text_style_source = None
+
+
+def _label_text_style():
+    source = label_text_style_source
+    if source is None:
+        return None
+    try:
+        return source()
+    except Exception:
+        return None
+
 
 # Vector files shown as panels (kept as vectors in PDF/SVG exports). A PDF page
 # is converted to SVG with PyMuPDF (AGPL, optional) or, without it, rendered
@@ -407,6 +425,9 @@ class Image2D(Rectangle2D):
         # printed figure), whatever the panel's scale; False (older figures): sizes in the
         # plot's own points, which shrink or grow with the panel
         self.publication_font_on_page = publication_font_on_page
+        # True: the text size is the size of the figure's labels (other than the letters),
+        # read when drawn; publication_font_size is kept as the size when it cannot be read
+        self.publication_font_size_from_labels = bool(kwargs.get('publication_font_size_from_labels', False))
         self._raw_svg_bytes = None
 
         # crops
@@ -1785,36 +1806,73 @@ class Image2D(Rectangle2D):
 
     def _toBuffer(self, bufferType='raster', apply_publication=False):
         if self.img is not None:
+            import matplotlib as mpl
+            from batoolset.matplolibs.tools import figure_pad_inches
             buf = io.BytesIO()
-            saved = self._apply_publication_style() if apply_publication else None
-            try:
-                import matplotlib as mpl
-                rc_overrides = self._publication_rc_overrides() if apply_publication else {}
-                # settings the plot was made with (e.g. LaTeX text: text.usetex and its
-                # preamble are read when the plot is drawn, not when it is made)
-                rc_overrides = {**(getattr(self.img, '_pyf_rc', None) or {}), **rc_overrides}
-                if bufferType != 'raster' and Image2D._export_editable_text:
-                    rc_overrides['svg.fonttype'] = 'none'
-                from batoolset.matplolibs.tools import figure_pad_inches
-                pad = figure_pad_inches(self.img)  # same pad get_fig_rect sized the panel with
-                with mpl.rc_context(rc_overrides):
+            rc_overrides = self._publication_rc_overrides() if apply_publication else {}
+            # settings the plot was made with (e.g. LaTeX text: text.usetex and its
+            # preamble are read when the plot is drawn, not when it is made)
+            rc_overrides = {**(getattr(self.img, '_pyf_rc', None) or {}), **rc_overrides}
+            if bufferType != 'raster' and Image2D._export_editable_text:
+                rc_overrides['svg.fonttype'] = 'none'
+            pad = figure_pad_inches(self.img)  # same pad get_fig_rect sized the panel with
+            if apply_publication and isinstance(self.img, plt.Figure):
+                # the panel's shape as laid out, measured (and cached) under the plot's own
+                # settings: measured under the page ones, the fit matched a wrong target
+                from batoolset.matplolibs.tools import get_fig_rect
+                get_fig_rect(self.img)
+            # fitted and drawn under the SAME settings, kept in step with the fitted sizes:
+            # fitted outside them, the tick labels made at the final draw (a new "50" when
+            # the y range grew) took other sizes, and a box plot came out 6% narrower than
+            # its panel, letterboxed with white strips (user, 2026-11-19)
+            with mpl.rc_context(rc_overrides):
+                self._rc_fit = apply_publication
+                saved = None
+                try:
+                    saved = self._apply_publication_style() if apply_publication else None
                     if bufferType == 'raster':
                         self.img.savefig(buf, format='png', bbox_inches='tight', pad_inches=pad)
                     else:
                         self.img.savefig(buf, format='svg', bbox_inches='tight', pad_inches=pad)
-            finally:
-                if saved is not None:
-                    self._restore_publication_style(saved)
+                finally:
+                    self._rc_fit = False
+                    if saved is not None:
+                        self._restore_publication_style(saved)
             buf.seek(0)
             return buf
         return None
+
+    _SIZE_RC = ('font.size', 'axes.titlesize', 'axes.labelsize', 'xtick.labelsize', 'ytick.labelsize',
+                'legend.fontsize')
+    _WIDTH_RC = ('lines.linewidth', 'axes.linewidth', 'xtick.major.width', 'ytick.major.width',
+                 'xtick.minor.width', 'ytick.minor.width', 'patch.linewidth')
+
+    def _rc_follow(self, font_pt, line_pt):
+        """Inside _toBuffer's settings only: the text and line sizes new artists get
+        (tick labels made at draw time) are the fitted ones."""
+        if not getattr(self, '_rc_fit', False):
+            return
+        import matplotlib as mpl
+        mpl.rcParams.update({**{k: font_pt for k in self._SIZE_RC}, **{k: line_pt for k in self._WIDTH_RC}})
 
     def _publication_family(self):
         """The figure font for the plot's text; None for a plot typeset by LaTeX
         (usetex knows no system font names: it would fall back to serif)."""
         if (getattr(self.img, '_pyf_rc', None) or {}).get('text.usetex'):
             return None
-        return getattr(self, 'publication_font', None)
+        family = getattr(self, 'publication_font', None)
+        if family == FOLLOW_LABELS:
+            style = _label_text_style()
+            return (style or {}).get('family') or _best_helvetica_clone()
+        return family
+
+    def _page_font_pt(self):
+        """The plot's text size on the page: the labels' size when it follows them."""
+        if getattr(self, 'publication_font_size_from_labels', False):
+            size = (_label_text_style() or {}).get('size')
+            if size:
+                return float(size)
+        return getattr(self, 'publication_font_size', 12)
 
     def _plot_points_per_page_point(self):
         """How many of the plot's own points make one point on the page: the plot (its
@@ -1835,7 +1893,7 @@ class Image2D(Rectangle2D):
         """(font size, line width) to draw the plot with: the publication sizes, turned
         from page points into the plot's own when they are page sizes."""
         k = self._plot_points_per_page_point()
-        return (getattr(self, 'publication_font_size', 12) * k,
+        return (self._page_font_pt() * k,
                 getattr(self, 'publication_line_width', 0.65) * k)
 
     def _publication_rc_overrides(self):
@@ -1873,6 +1931,7 @@ class Image2D(Rectangle2D):
                 shown = None
         font_size, line_width = self._publication_sizes()
         font_family = self._publication_family()
+        self._saved_tick_kw = {}                 # the axes' tick settings, put back afterwards
         saved_lw = []
         saved_fs = []
         for artist in self.img.findobj(lambda a: hasattr(a, 'set_linewidth') and hasattr(a, 'get_linewidth')):
@@ -1908,8 +1967,9 @@ class Image2D(Rectangle2D):
             return
         if getattr(self, '_export_original_renderer', None) is not None:
             return
-        key = (round(float(self.scale or 1), 4), getattr(self, 'publication_font_size', None),
-               getattr(self, 'publication_line_width', None), getattr(self, 'publication_font', None))
+        # the sizes and font as drawn: a plot that follows the labels is redrawn when they change
+        key = (round(float(self.scale or 1), 4), self._page_font_pt(),
+               getattr(self, 'publication_line_width', None), self._publication_family())
         renderer = getattr(self, 'renderer', None)
         if renderer is not None and getattr(renderer, '_pyf_page_key', None) == key:
             return
@@ -1941,7 +2001,9 @@ class Image2D(Rectangle2D):
             shown_h = shown.height() / scale
             target_aspect = shown_w / shown_h
             fig = self.img
+            from batoolset.matplolibs.tools import settle_figure
             for _ in range(4):
+                settle_figure(fig)                    # draw-time layouts settle first (brackets)
                 renderer = fig.canvas.get_renderer()
                 box = fig.get_tightbbox(renderer).padded(figure_pad_inches(fig))
                 drawn_w, drawn_h = box.width * 72.0, box.height * 72.0
@@ -1955,8 +2017,20 @@ class Image2D(Rectangle2D):
                     box = fig.get_tightbbox(fig.canvas.get_renderer()).padded(figure_pad_inches(fig))
                     drawn_h = box.height * 72.0
                 k = drawn_h / shown_h                 # plot points per page point
-                font_pt = getattr(self, 'publication_font_size', 12) * k
+                font_pt = self._page_font_pt() * k
                 line_pt = getattr(self, 'publication_line_width', 0.65) * k
+                self._rc_follow(font_pt, line_pt)
+                # tick labels made at the next draw copy the axis' tick settings (staplot's
+                # 9 pt): one axis showed two text sizes (user, 2026-11-19)
+                for ax in fig.axes:
+                    for axis in (ax.xaxis, ax.yaxis):
+                        saved_ticks = getattr(self, '_saved_tick_kw', None)
+                        if saved_ticks is not None and axis not in saved_ticks:
+                            saved_ticks[axis] = (dict(axis._major_tick_kw), dict(axis._minor_tick_kw))
+                        try:
+                            axis.set_tick_params(which='both', labelsize=font_pt, width=line_pt)
+                        except Exception:
+                            pass
                 for t in texts:
                     t.set_fontsize(font_pt)
                 for a in line_artists:
@@ -1966,6 +2040,19 @@ class Image2D(Rectangle2D):
                         pass
                 # the layout again for the new text sizes: in a small panel, 7 pt labels
                 # ran into each other (a two-way ANOVA note over the tick labels)
+                self._relayout_plot(fig)
+            # the last re-layout (and draw-time layouts: brackets) changed the outline after
+            # its shape was matched: matched again, width only, until it holds (a box plot
+            # with brackets ended 6% narrower than its panel, letterboxed with white strips
+            # left and right; user, 2026-11-19)
+            for _ in range(6):
+                settle_figure(fig)
+                box = fig.get_tightbbox(fig.canvas.get_renderer()).padded(figure_pad_inches(fig))
+                drawn_w, drawn_h = box.width * 72.0, box.height * 72.0
+                if drawn_w <= 0 or drawn_h <= 0 or abs((drawn_w / drawn_h) / target_aspect - 1) <= 0.002:
+                    break
+                w, h = fig.get_size_inches()
+                fig.set_size_inches(max(0.5, w + (target_aspect * drawn_h - drawn_w) / 72.0), h)
                 self._relayout_plot(fig)
         except Exception:
             traceback.print_exc()
@@ -2012,6 +2099,15 @@ class Image2D(Rectangle2D):
             pass
 
     def _restore_publication_style(self, saved):
+        for axis, (major, minor) in (getattr(self, '_saved_tick_kw', None) or {}).items():
+            try:
+                axis._major_tick_kw.clear()
+                axis._major_tick_kw.update(major)
+                axis._minor_tick_kw.clear()
+                axis._minor_tick_kw.update(minor)
+            except Exception:
+                pass
+        self._saved_tick_kw = {}
         for ax, pos in saved.get('positions') or []:
             try:
                 ax.set_position(pos)
