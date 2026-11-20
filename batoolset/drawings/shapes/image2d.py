@@ -3583,7 +3583,13 @@ painter.setRenderHints(Qt.SmoothPixmapTransform | Qt.HighQualityAntialiasing)
             # written by the MCP transform_image read it (without it every
             # flipped panel failed with NameError and showed nothing)
             local_namespace['file_path'] = self.filename
-            exec(code, locals(), local_namespace)
+            # ONE namespace: with separate globals and locals a function the script
+            # defines (a recursive tree drawer, a helper) saw neither the script's
+            # imports nor itself -> NameError (user 2026-11-20: scripts for plots
+            # PyFigures has no tool for, e.g. a phylogenetic tree)
+            namespace = {**locals(), **local_namespace}
+            exec(code, namespace)
+            local_namespace.update({k: v for k, v in namespace.items() if k not in local_namespace})
             if 'self.img' in local_namespace:
                 self.img = local_namespace['self.img'] # shall I transfer more things ? -−> maybe !!!
         except Exception as e:
