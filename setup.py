@@ -5,7 +5,7 @@ with open('README.md', encoding='utf-8') as f:
 
 setuptools.setup(
     name='batoolset-gui',
-    version='0.2.7',
+    version='0.2.8',
     author='Benoit Aigouy',
     author_email='benoit.aigouy@gmail.com',
     description='Qt/GUI layer for batoolset (drawings, figure, luts, widgets)',
@@ -22,7 +22,7 @@ setuptools.setup(
         'Operating System :: OS Independent',
     ],
     install_requires=[
-        'batoolset>=0.2.4',
+        'batoolset>=0.2.5',
         'PyQt6',            # its Qt6 wheel ships the image plugins (qtiff, qwebp...)
         'QtPy>=2.1.0',
         'qtawesome',

@@ -124,6 +124,20 @@ FOLLOW_LABELS = 'figure'
 label_text_style_source = None
 
 
+_FONT_DRAWS = {}
+
+
+def _font_draws(family):
+    """Whether matplotlib can draw text in *family*, checked once per family."""
+    if family not in _FONT_DRAWS:
+        try:
+            from batoolset.matplolibs.tools import font_draws
+        except ImportError:                       # an older batoolset: assume it can
+            return True
+        _FONT_DRAWS[family] = font_draws(family)
+    return _FONT_DRAWS[family]
+
+
 def _label_text_style():
     source = label_text_style_source
     if source is None:
@@ -1863,7 +1877,11 @@ class Image2D(Rectangle2D):
         family = getattr(self, 'publication_font', None)
         if family == FOLLOW_LABELS:
             style = _label_text_style()
-            return (style or {}).get('family') or _best_helvetica_clone()
+            family = (style or {}).get('family') or _best_helvetica_clone()
+        # a font matplotlib cannot draw with ("failed to load glyph": macOS's system
+        # Helvetica .ttc, 2026-11-20) is replaced by the best one it can
+        if family and not _font_draws(family):
+            return _best_helvetica_clone()
         return family
 
     def _page_font_pt(self):
