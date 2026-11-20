@@ -138,6 +138,11 @@ def _font_draws(family):
     return _FONT_DRAWS[family]
 
 
+def _is_glyph_error(e):
+    """matplotlib's FreeType error for a font it lists but cannot draw (macOS Helvetica)."""
+    return isinstance(e, RuntimeError) and 'glyph' in str(e)
+
+
 def _label_text_style():
     source = label_text_style_source
     if source is None:
@@ -1881,7 +1886,9 @@ class Image2D(Rectangle2D):
         # a font matplotlib cannot draw with ("failed to load glyph": macOS's system
         # Helvetica .ttc, 2026-11-20) is replaced by the best one it can
         if family and not _font_draws(family):
-            return _best_helvetica_clone()
+            clone = _best_helvetica_clone()
+            # the clone too can fail when drawn at the plot's sizes (macOS CI, 2026-11-20)
+            return clone if _font_draws(clone) else 'DejaVu Sans'
         return family
 
     def _page_font_pt(self):
@@ -2002,7 +2009,7 @@ class Image2D(Rectangle2D):
         except Exception:
             traceback.print_exc()
 
-    def _fit_page_sizes(self, shown, line_artists, texts):
+    def _fit_page_sizes_once(self, shown, line_artists, texts):
         """Sizes on the page, exactly, and the panel filled: new text sizes change the
         plot's outline (tight bbox), and the plot was then fitted into the same panel,
         smaller than planned (a plot with a legend beside it: 5 pt instead of 7) and no
@@ -2072,8 +2079,39 @@ class Image2D(Rectangle2D):
                 w, h = fig.get_size_inches()
                 fig.set_size_inches(max(0.5, w + (target_aspect * drawn_h - drawn_w) / 72.0), h)
                 self._relayout_plot(fig)
-        except Exception:
+        except Exception as e:
+            if _is_glyph_error(e):
+                raise
             traceback.print_exc()
+
+    def _fit_page_sizes(self, shown, line_artists, texts):
+        """_fit_page_sizes_once; when its font cannot be drawn after all ("failed to load
+        glyph" while measuring the tick labels: PyFigures CI on macOS 2026-11-20, the plot
+        was left unfitted, 2-4 % of its panel empty), that font is dropped and the plot is
+        fitted again in the next one (the Helvetica clone, else DejaVu Sans)."""
+        for _ in range(3):
+            try:
+                self._fit_page_sizes_once(shown, line_artists, texts)
+                return
+            except Exception as e:
+                if not _is_glyph_error(e):
+                    traceback.print_exc()
+                    return
+                bad = self._publication_family()
+                if not bad or bad == 'DejaVu Sans':
+                    traceback.print_exc()
+                    return
+                _FONT_DRAWS[bad] = False
+                good = self._publication_family()
+                import matplotlib as mpl
+                import matplotlib.text as mtext
+                if mpl.rcParams.get('font.family') in ([bad], bad):
+                    mpl.rcParams['font.family'] = good   # tick labels made at the next draw
+                for t in self.img.findobj(mtext.Text):
+                    try:
+                        t.set_fontfamily(good)
+                    except Exception:
+                        pass
 
     @staticmethod
     def _relayout_plot(fig):
