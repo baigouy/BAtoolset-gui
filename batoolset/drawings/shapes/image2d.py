@@ -138,6 +138,73 @@ def _font_draws(family):
     return _FONT_DRAWS[family]
 
 
+# the parts of a plot's text that can have their own size and font
+PLOT_TEXT_PARTS = ('title', 'axis_labels', 'ticks', 'legend')
+# the matplotlib settings new text of each part takes its size from
+_PART_RC = {'title': ('axes.titlesize', 'figure.titlesize'), 'axis_labels': ('axes.labelsize',),
+            'ticks': ('xtick.labelsize', 'ytick.labelsize'), 'legend': ('legend.fontsize', 'legend.title_fontsize')}
+
+
+def parse_text_parts(value):
+    """{part: {'pt': float, 'font': str}} from publication_text_parts (JSON text or a
+    dict); parts and values that are not valid are left out."""
+    import json
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    for part, style in value.items():
+        if part not in PLOT_TEXT_PARTS or not isinstance(style, dict):
+            continue
+        clean = {}
+        try:
+            if style.get('pt') not in (None, '', 0):
+                clean['pt'] = float(style['pt'])
+        except (TypeError, ValueError):
+            pass
+        if isinstance(style.get('font'), str) and style['font'].strip():
+            clean['font'] = style['font'].strip()
+        if clean:
+            out[part] = clean
+    return out
+
+
+def text_parts(fig):
+    """{id(text): part} for the texts of a matplotlib figure: its titles, axis labels,
+    tick labels and legend texts. Other texts (statistics, notes) are not listed."""
+    roles = {}
+
+    def put(text, part):
+        if text is not None:
+            roles[id(text)] = part
+    put(getattr(fig, '_suptitle', None), 'title')
+    put(getattr(fig, '_supxlabel', None), 'axis_labels')
+    put(getattr(fig, '_supylabel', None), 'axis_labels')
+    legends = list(getattr(fig, 'legends', []) or [])
+    for ax in fig.axes:
+        for t in (getattr(ax, 'title', None), getattr(ax, '_left_title', None), getattr(ax, '_right_title', None)):
+            put(t, 'title')
+        put(ax.xaxis.label, 'axis_labels')
+        put(ax.yaxis.label, 'axis_labels')
+        for axis in (ax.xaxis, ax.yaxis):
+            for tick in list(axis.majorTicks) + list(axis.minorTicks):
+                put(tick.label1, 'ticks')
+                put(tick.label2, 'ticks')
+        if ax.get_legend() is not None:
+            legends.append(ax.get_legend())
+    for leg in legends:
+        for t in leg.get_texts():
+            put(t, 'legend')
+        put(leg.get_title(), 'legend')
+    return roles
+
+
 def _is_glyph_error(e):
     """matplotlib's FreeType error for a font it lists but cannot draw (macOS Helvetica)."""
     return isinstance(e, RuntimeError) and 'glyph' in str(e)
@@ -447,6 +514,11 @@ class Image2D(Rectangle2D):
         # True: the text size is the size of the figure's labels (other than the letters),
         # read when drawn; publication_font_size is kept as the size when it cannot be read
         self.publication_font_size_from_labels = bool(kwargs.get('publication_font_size_from_labels', False))
+        # a size (on the page, like publication_font_size) and / or a font for one part of
+        # a plot's text: {"title": {"pt": 10, "font": "Arial"}, "axis_labels": ..., "ticks":
+        # ..., "legend": ...}, kept as JSON text; a part not listed follows the whole plot
+        # (user, 2026-11-20: "make title bigger" made all the plot's text bigger)
+        self.publication_text_parts = kwargs.get('publication_text_parts')
         self._raw_svg_bytes = None
 
         # crops
@@ -1872,7 +1944,74 @@ class Image2D(Rectangle2D):
         if not getattr(self, '_rc_fit', False):
             return
         import matplotlib as mpl
-        mpl.rcParams.update({**{k: font_pt for k in self._SIZE_RC}, **{k: line_pt for k in self._WIDTH_RC}})
+        page = self._page_font_pt()
+        per_page = font_pt / page if page else 1.0
+        mpl.rcParams.update({**{k: font_pt for k in self._SIZE_RC}, **{k: line_pt for k in self._WIDTH_RC},
+                             **self._part_rc(per_page)})
+
+    def _text_part_styles(self):
+        """{part: {'pt', 'font'}} set for this plot (publication_text_parts)."""
+        return parse_text_parts(getattr(self, 'publication_text_parts', None))
+
+    def _part_rc(self, per_page):
+        """The size settings of the parts that have their own size (*per_page*: plot
+        points per page point)."""
+        rc = {}
+        for part, style in self._text_part_styles().items():
+            if style.get('pt'):
+                for key in _PART_RC[part]:
+                    rc[key] = style['pt'] * per_page
+        return rc
+
+    def _style_text_parts(self, texts, per_page):
+        """The parts with their own size or font (a bigger title, smaller tick labels),
+        over the plot's text size and font. *per_page*: plot points per page point."""
+        parts = self._text_part_styles()
+        if not parts or not isinstance(self.img, plt.Figure):
+            return
+        latex = bool((getattr(self.img, '_pyf_rc', None) or {}).get('text.usetex'))
+
+        def family(style):
+            # LaTeX knows no system font names; a font matplotlib cannot draw is left out
+            font = style.get('font')
+            return font if font and not latex and _font_draws(font) else None
+        roles = text_parts(self.img)
+        for t in texts:
+            style = parts.get(roles.get(id(t)))
+            if not style:
+                continue
+            try:
+                if style.get('pt'):
+                    t.set_fontsize(style['pt'] * per_page)
+                if family(style):
+                    t.set_fontfamily(family(style))
+            except Exception:
+                pass
+        ticks = parts.get('ticks')
+        if not ticks:
+            return
+        kw = {}
+        if ticks.get('pt'):
+            kw['labelsize'] = ticks['pt'] * per_page
+        if family(ticks):
+            kw['labelfontfamily'] = family(ticks)
+        saved_ticks = getattr(self, '_saved_tick_kw', None)
+        for ax in self.img.axes:
+            for axis in (ax.xaxis, ax.yaxis):
+                if saved_ticks is not None and axis not in saved_ticks:
+                    saved_ticks[axis] = (dict(axis._major_tick_kw), dict(axis._minor_tick_kw))
+                try:
+                    axis.set_tick_params(which='both', **kw)
+                except (TypeError, ValueError):     # labelfontfamily: matplotlib < 3.8
+                    kw.pop('labelfontfamily', None)
+                    if kw:
+                        try:
+                            axis.set_tick_params(which='both', **kw)
+                        except Exception:
+                            pass
+                    if family(ticks):
+                        for t in axis.get_ticklabels(which='both'):
+                            t.set_fontfamily(family(ticks))
 
     def _publication_family(self):
         """The figure font for the plot's text; None for a plot typeset by LaTeX
@@ -1941,6 +2080,7 @@ class Image2D(Rectangle2D):
         }
         if font_family:
             overrides['font.family'] = font_family
+        overrides.update(self._part_rc(self._plot_points_per_page_point()))
         return overrides
 
     def _apply_publication_style(self):
@@ -1976,6 +2116,8 @@ class Image2D(Rectangle2D):
                 saved_fs.append((text, fs, ff))
             except Exception:
                 pass
+        # a title, axis labels, tick labels or legend with their own size / font
+        self._style_text_parts([t for t, _, _ in saved_fs], self._plot_points_per_page_point())
         positions = None
         if shown is not None:
             positions = [(ax, ax.get_position(original=True)) for ax in self.img.axes]
@@ -1994,7 +2136,8 @@ class Image2D(Rectangle2D):
             return
         # the sizes and font as drawn: a plot that follows the labels is redrawn when they change
         key = (round(float(self.scale or 1), 4), self._page_font_pt(),
-               getattr(self, 'publication_line_width', None), self._publication_family())
+               getattr(self, 'publication_line_width', None), self._publication_family(),
+               repr(sorted(self._text_part_styles().items())))
         renderer = getattr(self, 'renderer', None)
         if renderer is not None and getattr(renderer, '_pyf_page_key', None) == key:
             return
@@ -2058,6 +2201,7 @@ class Image2D(Rectangle2D):
                             pass
                 for t in texts:
                     t.set_fontsize(font_pt)
+                self._style_text_parts(texts, k)          # parts with their own size / font
                 for a in line_artists:
                     try:
                         a.set_linewidth(line_pt)
