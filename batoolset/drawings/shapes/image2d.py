@@ -9,7 +9,7 @@ from batoolset.drawings.shapes.automated_alignment_drawing_refactored import com
 from batoolset.pyqts.tools import check_antialiasing, copy_transform_without_rotation, rotate_image, copy_scale_only, \
     copy_scale_and_translation_only, crop_image, get_shape_after_rotation_and_crop, tst_translation
 from batoolset.serializations.tools import create_objects_from_dict, object_to_xml
-from batoolset.matplolibs.tools import get_fig_rect
+from batoolset.matplolibs.tools import get_fig_rect, figure_renderer
 import os
 import traceback
 from batoolset.drawings.shapes.Position import groupby_position, Position
@@ -2004,7 +2004,7 @@ class Image2D(Rectangle2D):
             from batoolset.matplolibs.tools import settle_figure
             for _ in range(4):
                 settle_figure(fig)                    # draw-time layouts settle first (brackets)
-                renderer = fig.canvas.get_renderer()
+                renderer = figure_renderer(fig)
                 box = fig.get_tightbbox(renderer).padded(figure_pad_inches(fig))
                 drawn_w, drawn_h = box.width * 72.0, box.height * 72.0
                 if drawn_w <= 0 or drawn_h <= 0:
@@ -2014,7 +2014,7 @@ class Image2D(Rectangle2D):
                 aspect = drawn_w / drawn_h
                 if abs(aspect / target_aspect - 1) > 0.002:
                     fig.set_size_inches(max(0.5, w + (target_aspect * drawn_h - drawn_w) / 72.0), h)
-                    box = fig.get_tightbbox(fig.canvas.get_renderer()).padded(figure_pad_inches(fig))
+                    box = fig.get_tightbbox(figure_renderer(fig)).padded(figure_pad_inches(fig))
                     drawn_h = box.height * 72.0
                 k = drawn_h / shown_h                 # plot points per page point
                 font_pt = self._page_font_pt() * k
@@ -2047,7 +2047,7 @@ class Image2D(Rectangle2D):
             # left and right; user, 2026-11-19)
             for _ in range(6):
                 settle_figure(fig)
-                box = fig.get_tightbbox(fig.canvas.get_renderer()).padded(figure_pad_inches(fig))
+                box = fig.get_tightbbox(figure_renderer(fig)).padded(figure_pad_inches(fig))
                 drawn_w, drawn_h = box.width * 72.0, box.height * 72.0
                 if drawn_w <= 0 or drawn_h <= 0 or abs((drawn_w / drawn_h) / target_aspect - 1) <= 0.002:
                     break
@@ -2074,7 +2074,7 @@ class Image2D(Rectangle2D):
         try:
             # room for the figure's own texts at its bottom edge (a note under the axes,
             # e.g. staplot's two-way ANOVA): measured at their new size
-            renderer = fig.canvas.get_renderer()
+            renderer = figure_renderer(fig)
             bottom = 0.0
             for t in fig.texts:
                 if t.get_visible() and t.get_text().strip() and t.get_position()[1] < 0.15:
